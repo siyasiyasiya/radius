@@ -32,3 +32,10 @@ Cargo.lock # For Anchor multi-program workspace (optional)
 # Environment
 .env
 .env.local
+
+.DS_Store
+**/.DS_Store
+
+components/
+src/
+
