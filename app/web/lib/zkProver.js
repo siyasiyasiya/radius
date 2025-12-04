@@ -51,7 +51,7 @@ export async function proveLocation({ userLat, userLon, minLat, maxLat, minLon, 
   if (typeof window === "undefined" || !window.snarkjs) {
     throw new Error("snarkjs not loaded. It is injected via <Script src='/zk/snarkjs.min.js' />");
   }
-  const cacheBuster = "v=4";
+  const cacheBuster = "v=5";
   const wasm = `/zk/spatial_check_js/spatial_check.wasm?${cacheBuster}`;
   const zkey = `/zk/spatial_check_final.zkey?${cacheBuster}`;
 

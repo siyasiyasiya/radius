@@ -8,5 +8,12 @@ members = [
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
+[toolchain]
+anchor_version = "0.31.1"
+
+[programs.localnet]
+zk_location_verifier = "Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD"
+hyperlocal_markets = "8pkLV5wpiXFTu9VGwhDMdUESp1RkQUPfa8CyqT2bKket"
+
 [scripts]
 test = "anchor test"

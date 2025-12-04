@@ -1,10 +1,9 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::keccak;
-use groth16_solana::processor::Groth16Verifier;
+use groth16_solana::groth16::Groth16Verifier;
 
 pub mod verifying_key;
 
-declare_id!("zkLocaTion111111111111111111111111111111111");
+declare_id!("Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD");
 
 #[program]
 pub mod zk_location_verifier {
@@ -12,7 +11,7 @@ pub mod zk_location_verifier {
 
     pub fn init_config(ctx: Context<InitConfig>) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        config.bump = *ctx.bumps.get("config").unwrap();
+        config.bump = ctx.bumps.config;
         Ok(())
     }
 
@@ -23,16 +22,11 @@ pub mod zk_location_verifier {
     ) -> Result<()> {
         // Verify Groth16 proof against the embedded verifying key.
         let vk = verifying_key::verifying_key();
-        let mut verifier =
-            Groth16Verifier::new(vk).map_err(|_| error!(ZkLocationError::InvalidProof))?;
-        verifier
-            .verify(
-                &proof.proof_a,
-                &proof.proof_b,
-                &proof.proof_c,
-                &public_inputs.as_public_inputs(),
-            )
+        let (proof_a, proof_b, proof_c) = proof.flatten();
+        let pub_inputs = public_inputs.as_public_inputs();
+        let mut verifier = Groth16Verifier::new(&proof_a, &proof_b, &proof_c, &pub_inputs, &vk)
             .map_err(|_| error!(ZkLocationError::InvalidProof))?;
+        verifier.verify().map_err(|_| error!(ZkLocationError::InvalidProof))?;
 
         // Compute region_id = keccak(targetLat || targetLon || radiusSq).
         let mut region_seed = Vec::with_capacity(96);
@@ -40,14 +34,20 @@ pub mod zk_location_verifier {
         region_seed.extend_from_slice(&public_inputs.max_lat);
         region_seed.extend_from_slice(&public_inputs.min_lon);
         region_seed.extend_from_slice(&public_inputs.max_lon);
-        let region_hash = keccak::hash(&region_seed);
+        let mut region_id = [0u8; 32];
+        for (i, byte) in region_seed.iter().enumerate().take(32) {
+            region_id[i] = region_seed[i]
+                ^ public_inputs.max_lat[i]
+                ^ public_inputs.min_lon[i]
+                ^ public_inputs.max_lon[i];
+        }
 
         // Persist membership.
         let user_state = &mut ctx.accounts.user_state;
         user_state.is_verified = true;
     user_state.last_verified_slot = Clock::get()?.slot;
     user_state.nullifier = [0u8; 32];
-        user_state.region_id = region_hash.0;
+        user_state.region_id = region_id;
 
         Ok(())
     }
@@ -129,6 +129,26 @@ impl LocationPublicInputs {
             self.min_lon,
             self.max_lon,
         ]
+    }
+}
+
+impl Groth16Proof {
+    pub fn flatten(&self) -> ([u8; 64], [u8; 128], [u8; 64]) {
+        let mut a = [0u8; 64];
+        a[..32].copy_from_slice(&self.proof_a[0]);
+        a[32..].copy_from_slice(&self.proof_a[1]);
+
+        let mut b = [0u8; 128];
+        b[..32].copy_from_slice(&self.proof_b[0][0]);
+        b[32..64].copy_from_slice(&self.proof_b[0][1]);
+        b[64..96].copy_from_slice(&self.proof_b[1][0]);
+        b[96..].copy_from_slice(&self.proof_b[1][1]);
+
+        let mut c = [0u8; 64];
+        c[..32].copy_from_slice(&self.proof_c[0]);
+        c[32..].copy_from_slice(&self.proof_c[1]);
+
+        (a, b, c)
     }
 }
 

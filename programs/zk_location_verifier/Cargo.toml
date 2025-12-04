@@ -8,11 +8,10 @@ crate-type = ["cdylib", "lib"]
 name = "zk_location_verifier"
 
 [dependencies]
-anchor-lang = { workspace = true }
+anchor-lang = { workspace = true, features = ["init-if-needed"] }
 groth16-solana = { workspace = true }
 
 [features]
 no-entrypoint = []
 idl-build = ["anchor-lang/idl-build"]
-no-idl = ["anchor-lang/no-idl"]
 default = []
