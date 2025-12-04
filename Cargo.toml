@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "programs/zk_location_verifier",
+    "programs/hyperlocal_markets",
+]
+
+[workspace.dependencies]
+anchor-lang = "0.30.1"
+groth16-solana = "0.2.5"

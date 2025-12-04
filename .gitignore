@@ -1,0 +1,34 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Next.js build output
+.next/
+out/
+
+# Circom build artifacts
+*.r1cs
+*.wasm
+*.sym
+*.zkey
+circuits/spatial_check_js/
+circuits/spatial_check.wasm
+circuits/spatial_check.r1cs
+circuits/spatial_check.sym
+circuits/spatial_check_0000.zkey
+circuits/spatial_check_final.zkey
+circuits/spatial_check_js/
+
+# Web build artifacts (zkeys + wasm copied to web)
+app/web/lib/spatial_check.wasm
+app/web/lib/spatial_check_final.zkey
+app/web/lib/spatial_check_js/
+
+# Rust
+target/
+Cargo.lock # For Anchor multi-program workspace (optional)
+
+# Environment
+.env
+.env.local
