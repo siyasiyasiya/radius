@@ -40,31 +40,32 @@ function packProof(proof) {
 
 function packPublicSignals(publicSignals) {
   return {
-    target_lat: toBytes32(publicSignals[0]),
-    target_lon: toBytes32(publicSignals[1]),
-    radius_sq: toBytes32(publicSignals[2]),
+    min_lat: toBytes32(publicSignals[0]),
+    max_lat: toBytes32(publicSignals[1]),
+    min_lon: toBytes32(publicSignals[2]),
+    max_lon: toBytes32(publicSignals[3]),
   };
 }
 
-export async function proveLocation({ userLat, userLon, targetLat, targetLon, radiusMeters, salt }) {
+export async function proveLocation({ userLat, userLon, minLat, maxLat, minLon, maxLon, salt }) {
   if (typeof window === "undefined" || !window.snarkjs) {
     throw new Error("snarkjs not loaded. It is injected via <Script src='/zk/snarkjs.min.js' />");
   }
-  const cacheBuster = "v=3";
+  const cacheBuster = "v=4";
   const wasm = `/zk/spatial_check_js/spatial_check.wasm?${cacheBuster}`;
   const zkey = `/zk/spatial_check_final.zkey?${cacheBuster}`;
 
   const scaledUserLat = scaleCoord(userLat);
   const scaledUserLon = scaleCoord(userLon);
-  const radiusSq = degreeRadiusSq(radiusMeters);
   const saltBig = toBigInt(salt ?? 0);
 
   const input = {
     userLat: scaledUserLat.toString(),
     userLon: scaledUserLon.toString(),
-    targetLat: scaleCoord(targetLat).toString(),
-    targetLon: scaleCoord(targetLon).toString(),
-    radiusSq: radiusSq.toString(),
+    minLat: scaleCoord(minLat).toString(),
+    maxLat: scaleCoord(maxLat).toString(),
+    minLon: scaleCoord(minLon).toString(),
+    maxLon: scaleCoord(maxLon).toString(),
     salt: saltBig.toString(),
   };
 

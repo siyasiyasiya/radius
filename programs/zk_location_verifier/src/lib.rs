@@ -36,14 +36,15 @@ pub mod zk_location_verifier {
 
         // Compute region_id = keccak(targetLat || targetLon || radiusSq).
         let mut region_seed = Vec::with_capacity(96);
-        region_seed.extend_from_slice(&public_inputs.target_lat);
-        region_seed.extend_from_slice(&public_inputs.target_lon);
-        region_seed.extend_from_slice(&public_inputs.radius_sq);
+        region_seed.extend_from_slice(&public_inputs.min_lat);
+        region_seed.extend_from_slice(&public_inputs.max_lat);
+        region_seed.extend_from_slice(&public_inputs.min_lon);
+        region_seed.extend_from_slice(&public_inputs.max_lon);
         let region_hash = keccak::hash(&region_seed);
 
         // Persist membership.
         let user_state = &mut ctx.accounts.user_state;
-    user_state.is_verified = true;
+        user_state.is_verified = true;
     user_state.last_verified_slot = Clock::get()?.slot;
     user_state.nullifier = [0u8; 32];
         user_state.region_id = region_hash.0;
@@ -114,17 +115,19 @@ pub struct Groth16Proof {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct LocationPublicInputs {
-    pub target_lat: [u8; 32],
-    pub target_lon: [u8; 32],
-    pub radius_sq: [u8; 32],
+    pub min_lat: [u8; 32],
+    pub max_lat: [u8; 32],
+    pub min_lon: [u8; 32],
+    pub max_lon: [u8; 32],
 }
 
 impl LocationPublicInputs {
-    pub fn as_public_inputs(&self) -> [[u8; 32]; 3] {
+    pub fn as_public_inputs(&self) -> [[u8; 32]; 4] {
         [
-            self.target_lat,
-            self.target_lon,
-            self.radius_sq,
+            self.min_lat,
+            self.max_lat,
+            self.min_lon,
+            self.max_lon,
         ]
     }
 }

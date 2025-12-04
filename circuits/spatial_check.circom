@@ -3,46 +3,41 @@ pragma circom 2.1.4;
 include "circomlib/circuits/comparators.circom";
 include "circomlib/circuits/poseidon.circom";
 
-// Proves (userLat, userLon) is within radius of (targetLat, targetLon).
+// Proves (userLat, userLon) is inside a bounding box.
 // Coordinates are scaled integers (e.g., degrees * 1e6).
 template SpatialCheck() {
-    // Public signals
-    signal input targetLat;
-    signal input targetLon;
-    signal input radiusSq;
+    // Public signals: bounding box (min/max lat/lon)
+    signal input minLat;
+    signal input maxLat;
+    signal input minLon;
+    signal input maxLon;
 
     // Private signals
     signal input userLat;
     signal input userLon;
     signal input salt;
 
-    // delta = user - target
-    signal latDiff;
-    signal lonDiff;
-    latDiff <== userLat - targetLat;
-    lonDiff <== userLon - targetLon;
+    // minLat <= userLat <= maxLat
+    component latLower = LessEqThan(64);
+    latLower.in[0] <== minLat;
+    latLower.in[1] <== userLat;
+    latLower.out === 1;
 
-    // squared distance
-    signal latDiffSq;
-    signal lonDiffSq;
-    signal distSq;
-    latDiffSq <== latDiff * latDiff;
-    lonDiffSq <== lonDiff * lonDiff;
-    distSq <== latDiffSq + lonDiffSq;
+    component latUpper = LessEqThan(64);
+    latUpper.in[0] <== userLat;
+    latUpper.in[1] <== maxLat;
+    latUpper.out === 1;
 
-    // radius check
-    component distCheck = LessEqThan(64);
-    distCheck.in[0] <== distSq;
-    distCheck.in[1] <== radiusSq;
-    distCheck.out === 1;
+    // minLon <= userLon <= maxLon
+    component lonLower = LessEqThan(64);
+    lonLower.in[0] <== minLon;
+    lonLower.in[1] <== userLon;
+    lonLower.out === 1;
 
-    // hash nullifier
-    component hasher = Poseidon(3);
-    hasher.inputs[0] <== userLat;
-    hasher.inputs[1] <== userLon;
-    hasher.inputs[2] <== salt;
-
-    // Nullifier omitted in public signals for this demo; use hasher.out if needed.
+    component lonUpper = LessEqThan(64);
+    lonUpper.in[0] <== userLon;
+    lonUpper.in[1] <== maxLon;
+    lonUpper.out === 1;
 }
 
-component main { public [targetLat, targetLon, radiusSq] } = SpatialCheck();
+component main { public [minLat, maxLat, minLon, maxLon] } = SpatialCheck();

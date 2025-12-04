@@ -12,6 +12,8 @@ out/
 *.wasm
 *.sym
 *.zkey
+circuits/verification_key.json
+circuits/powersOfTau28_hez_final_12.ptau
 circuits/spatial_check_js/
 circuits/spatial_check.wasm
 circuits/spatial_check.r1cs
@@ -24,6 +26,7 @@ circuits/spatial_check_js/
 app/web/lib/spatial_check.wasm
 app/web/lib/spatial_check_final.zkey
 app/web/lib/spatial_check_js/
+app/web/lib/snarkjs.min.js
 
 # Rust
 target/
@@ -38,4 +41,3 @@ Cargo.lock # For Anchor multi-program workspace (optional)
 
 components/
 src/
-

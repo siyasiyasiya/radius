@@ -7,7 +7,7 @@ export default function Home() {
   const logRef = useRef(null);
   const [userCoords, setUserCoords] = useState(null);
   const [locationQuery, setLocationQuery] = useState("");
-  const [target, setTarget] = useState(null); // {lat, lon, radiusMeters}
+  const [target, setTarget] = useState(null); // {minLat, maxLat, minLon, maxLon}
   const [suggestions, setSuggestions] = useState([]);
   const [fetchingSuggestions, setFetchingSuggestions] = useState(false);
   const [salt, setSalt] = useState("0");
@@ -33,25 +33,38 @@ export default function Home() {
   };
 
   const selectLocation = (loc) => {
-    const lat = parseFloat(loc.lat);
-    const lon = parseFloat(loc.lon);
     const [s, n, w, e] = loc.boundingbox.map((v) => parseFloat(v));
-    const centerLat = (n + s) / 2;
-    const centerLon = (e + w) / 2;
-    const latMeters = (n - s) * 111_000;
-    const lonMeters = (e - w) * 111_000 * Math.cos((centerLat * Math.PI) / 180);
-    const diagonal = Math.hypot(latMeters, lonMeters);
-    const radiusMeters = (diagonal / 2) * 1.25 || 500;
-    setTarget({ lat: centerLat, lon: centerLon, radiusMeters });
+    setTarget({ minLat: s, maxLat: n, minLon: w, maxLon: e });
     log(`Location set to ${loc.display_name}`);
-    log(`Center: ${centerLat.toFixed(6)}, ${centerLon.toFixed(6)} | Radius ~${Math.round(radiusMeters)}m`);
+    log(
+      `BBox: [${s.toFixed(6)}, ${n.toFixed(6)}] lat, [${w.toFixed(6)}, ${e.toFixed(6)}] lon`
+    );
   };
 
   const fetchSuggestions = async (query) => {
     setFetchingSuggestions(true);
     try {
-      const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&polygon_geojson=0`, {
-        headers: { "User-Agent": "zk-location-demo/0.1" },
+      const params = new URLSearchParams({
+        q: query,
+        format: "json",
+        limit: "5",
+        polygon_geojson: "0",
+        addressdetails: "1",
+      });
+      // Bias results around the user's current location if available.
+      if (userCoords) {
+        const d = 0.3; // degrees ~33km
+        const viewbox = [
+          userCoords.longitude - d,
+          userCoords.latitude - d,
+          userCoords.longitude + d,
+          userCoords.latitude + d,
+        ].join(",");
+        params.set("viewbox", viewbox);
+        // don't hard bound; still allow wider matches
+      }
+      const resp = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+        headers: { "User-Agent": "zk-location-demo/0.1", "Accept-Language": "en" },
       });
       if (!resp.ok) throw new Error(`Geocode failed: ${resp.status}`);
       const data = await resp.json();
@@ -68,10 +81,16 @@ export default function Home() {
     const q = e.target.value;
     setLocationQuery(q);
     setSuggestions([]);
-    setTarget(null);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (q.trim().length < 3) return;
+    if (q.trim().length < 2) return;
     debounceRef.current = setTimeout(() => fetchSuggestions(q.trim()), 350);
+  };
+
+  const handleQueryFocus = () => {
+    if (locationQuery.trim().length >= 2) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => fetchSuggestions(locationQuery.trim()), 50);
+    }
   };
 
   const handleProve = async () => {
@@ -89,9 +108,10 @@ export default function Home() {
       const result = await proveLocation({
         userLat: userCoords.latitude,
         userLon: userCoords.longitude,
-        targetLat: target.lat,
-        targetLon: target.lon,
-        radiusMeters: target.radiusMeters,
+        minLat: target.minLat,
+        maxLat: target.maxLat,
+        minLon: target.minLon,
+        maxLon: target.maxLon,
         salt: salt || "0",
       });
       log("Proof generated. Public signals:");
@@ -140,6 +160,7 @@ export default function Home() {
                 type="text"
                 value={locationQuery}
                 onChange={handleQueryChange}
+                onFocus={handleQueryFocus}
                 placeholder="e.g. Purdue University"
                 autoComplete="off"
               />
@@ -173,8 +194,8 @@ export default function Home() {
               <input
                 readOnly
                 value={
-                  target
-                    ? `${target.lat.toFixed(6)}, ${target.lon.toFixed(6)} (~${Math.round(target.radiusMeters)}m)`
+                  target && target.minLat !== undefined
+                    ? `[${target.minLat.toFixed(6)}, ${target.maxLat.toFixed(6)}] lat, [${target.minLon.toFixed(6)}, ${target.maxLon.toFixed(6)}] lon`
                     : ""
                 }
                 placeholder="Lookup a location first"
