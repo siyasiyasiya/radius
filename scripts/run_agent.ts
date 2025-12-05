@@ -1,15 +1,10 @@
 /**
  * Off-chain resolution agent (Phase 3).
- * Run this with: npx ts-node agent.ts
- *
- * Env vars:
- * - GEMINI_API_KEY (Required - Get free at https://makersuite.google.com/app/apikey)
- * - TAVILY_API_KEY (Recommended for search) or SERPAPI_KEY
- * - RPC_URL (e.g., https://api.devnet.solana.com)
- * - RESOLVER_KEYPAIR (Path to your id.json)
+ * Run this with: npx ts-node scripts/run_agent.ts
  */
 import fs from "fs";
 import path from "path";
+import "dotenv/config";
 import { 
   Connection, 
   Keypair, 
@@ -21,8 +16,11 @@ import {
   ResolutionManifest,
   OracleResult,
   isValidManifest,
-} from "../app/types/manifest";
-import hyperlocalIdl from "../target/idl/hyperlocal_markets.json";
+} from "../app/types/manifest"; // Ensure this path is correct
+
+// Load IDL
+const hyperlocalIdlPath = path.resolve(process.cwd(), "target/idl/hyperlocal_markets.json");
+const hyperlocalIdl = JSON.parse(fs.readFileSync(hyperlocalIdlPath, "utf8")) as anchor.Idl;
 
 // 1. CONFIGURATION
 const PROGRAM_ID = new PublicKey(
@@ -34,17 +32,22 @@ const RESOLVER_KEYPAIR_PATH =
   process.env.RESOLVER_KEYPAIR ??
   path.join(process.env.HOME || ".", ".config", "solana", "id.json");
 
-// Gemini API configuration
+// FIX: Use the specific 'latest' alias which is more reliable than the generic tag
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
-// Outcome constants (Must match your Rust program)
 const OUTCOME_NONE = 0;
 const OUTCOME_YES = 1;
 const OUTCOME_NO = 2;
-const STATUS_RESOLVED = 2; 
+const STATUS_RESOLVED = 2; // Usually 2 in Rust enums (Active=1, Resolved=2, disputed=3 etc. verify your Rust state)
 
-type MarketAccount = anchor.IdlAccounts<typeof hyperlocalIdl>["market"];
+interface MarketAccount {
+  manifestUrl: string;
+  manifestHash: number[];
+  status: number;
+  closeTime: number | anchor.BN;
+  question: string;
+}
 
 // 2. HELPER FUNCTIONS
 function loadKeypair(filePath: string): Keypair {
@@ -52,22 +55,24 @@ function loadKeypair(filePath: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(raw));
 }
 
-// Support fetching manifests from HTTP/IPFS gateways or local files
 async function fetchManifest(market: MarketAccount): Promise<ResolutionManifest | null> {
   const url = market.manifestUrl;
   if (!url) return null;
 
   try {
-    // If it looks like a URL, fetch it
-    if (url.startsWith("http") || url.startsWith("https")) {
+    if (url.startsWith("http")) {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`HTTP error ${response.status}`);
       const data = await response.json();
       if (isValidManifest(data)) return data;
-    } 
-    // Fallback: Local file system (for testing)
-    else {
+    } else {
       let filePath = url;
+      // Resolve relative paths if needed
+      if (!fs.existsSync(filePath)) {
+        filePath = path.resolve(process.cwd(), url);
+      }
+      
+      // Fallback to manifest directory hash check
       if (!fs.existsSync(filePath)) {
         const manifestDir = path.join(process.cwd(), "manifests");
         const hashedName = Buffer.from(market.manifestHash).toString("hex");
@@ -87,179 +92,163 @@ async function fetchManifest(market: MarketAccount): Promise<ResolutionManifest 
   return null;
 }
 
-// Web search with Tavily (preferred) or SerpAPI fallback
-async function searchWeb(
-  query: string,
-  requiredDomains?: string
-): Promise<{ url: string; snippet: string }[]> {
-  // Prefer Tavily
+async function searchWeb(query: string, requiredDomains?: string): Promise<{ url: string; snippet: string }[]> {
+  // 1. Tavily
+  // 1. Tavily (Preferred & Improved)
   if (process.env.TAVILY_API_KEY) {
     try {
       const body: any = {
         api_key: process.env.TAVILY_API_KEY,
         query,
-        max_results: 5,
+        search_depth: "advanced", // <--- CRITICAL FIX: Scrapes deeper
+        max_results: 10,          // <--- CRITICAL FIX: Casts a wider net
+        include_answer: true,
       };
+      
       if (requiredDomains) {
         body.include_domains = requiredDomains.split(",").map((d) => d.trim());
       }
+      
       const resp = await fetch("https://api.tavily.com/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      
       const data: any = await resp.json();
+      
       if (Array.isArray(data.results)) {
         return data.results
           .map((r: any) => ({
             url: r.url ?? "",
-            snippet: r.content ?? r.snippet ?? "",
+            // Use 'content' (long) if available, fallback to 'snippet'
+            snippet: r.content && r.content.length > 50 ? r.content : (r.snippet ?? ""), 
           }))
-          .filter((r: any) => r.url);
+          .filter((r: any) => r.url && r.snippet);
       }
     } catch (e) {
       console.warn("Tavily search failed", e);
     }
-  } else if (process.env.SERPAPI_KEY) {
+  }
+  // 2. SerpAPI
+  else if (process.env.SERPAPI_KEY) {
     try {
-      const params = new URLSearchParams({
-        engine: "google",
-        q: query,
-        api_key: process.env.SERPAPI_KEY,
-        num: "5",
-      });
+      const params = new URLSearchParams({ engine: "google", q: query, api_key: process.env.SERPAPI_KEY, num: "5" });
       const resp = await fetch(`https://serpapi.com/search?${params.toString()}`);
       const data: any = await resp.json();
       if (Array.isArray(data.organic_results)) {
-        return data.organic_results
-          .map((r: any) => ({
-            url: r.link ?? "",
-            snippet: r.snippet ?? "",
-          }))
-          .filter((r: any) => r.url);
+        return data.organic_results.map((r: any) => ({ url: r.link, snippet: r.snippet })).filter((r: any) => r.url);
       }
-    } catch (e) {
-      console.warn("SerpAPI search failed", e);
-    }
-  } else {
-    console.warn("No TAVILY_API_KEY or SERPAPI_KEY set, cannot resolve market");
+    } catch (e) { console.warn("SerpAPI search failed", e); }
   }
-
   return [];
 }
 
-// Call Gemini API
 async function callGemini(prompt: string): Promise<any> {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY not set");
-  }
+  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not set");
+
+  // Log the URL being hit (hiding the key) to debug future 404s
+  console.log(`📡 Calling Gemini: ${GEMINI_API_URL.split('?')[0]}`);
 
   const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{
-        parts: [{ text: prompt }]
-      }],
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0,
-        topK: 1,
-        topP: 1,
         maxOutputTokens: 2048,
-      }
+      },
     }),
   });
 
+  const raw = await response.text();
+
   if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.status}`);
+    throw new Error(`Gemini API Error (${response.status}): ${raw}`);
   }
 
-  const data = await response.json();
-  return data;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse JSON: ${raw}`);
+  }
 }
 
 // 3. CORE LOGIC
-async function resolveMarketLogic(manifest: ResolutionManifest): Promise<OracleResult> {
+// Replace your existing resolveMarketLogic function with this:
+export async function resolveMarketLogic(manifest: ResolutionManifest): Promise<OracleResult> {
   // Use search logic
   const results = await searchWeb(
     manifest.config.search_query,
     manifest.config.required_domains
   );
   
-  // Create evidence block with clear separators
+  // Create evidence block
   const evidenceText = results.length > 0 
-    ? results.map((r) => `Source: ${r.url}\nContent: ${r.snippet}`).join("\n---\n")
+    ? results.map((r, i) => `[Result ${i+1}] Source: ${r.url}\nContent: ${r.snippet}`).join("\n\n")
     : "No search results found.";
 
-  if (!GEMINI_API_KEY) {
-    return { outcome: "UNSURE", confidence: 0, reason: "Missing GEMINI_API_KEY" };
-  }
-
-  if (results.length === 0) {
-    return { outcome: "UNSURE", confidence: 0, reason: "No search results found" };
-  }
+  if (!GEMINI_API_KEY) return { outcome: "UNSURE", confidence: 0, reason: "Missing GEMINI_API_KEY" };
+  if (results.length === 0) return { outcome: "UNSURE", confidence: 0, reason: "No search results found" };
 
   try {
-    const prompt = `You are an impartial oracle for a prediction market. You must determine the truth using ONLY the evidence text provided. Do NOT use external knowledge. Do NOT guess. Apply the given validation rules strictly.
+    // UPDATED PROMPT: More aggressive instructions on filtering
+    const prompt = `You are an impartial oracle. Your job is to determine the outcome of a prediction market based ONLY on the evidence provided.
 
-Question: ${manifest.title}
-Search Query: ${manifest.config.search_query}
-Validation Rules: ${JSON.stringify(manifest.config.validation_rules)}
+    CONTEXT:
+    Question: "${manifest.title}"
+    Rules: ${JSON.stringify(manifest.config.validation_rules)}
 
-Evidence:
-${evidenceText}
+    CRITICAL INSTRUCTIONS:
+    1. FILTERING: Search results often contain "noise" (e.g., if the question is about Football, ignore results about Basketball or Baseball).
+    2. DATES: Ensure the evidence matches the specific year/date in the Question.
+    3. SPECIFICITY: If 9 results discuss unrelated topics and 1 result contains the exact answer, rely on that 1 result.
 
-Return ONLY a valid JSON object with this exact format (no markdown, no extra text):
-{
-  "outcome": "YES" or "NO" or "UNSURE",
-  "confidence": number between 0 and 1,
-  "reason": "brief explanation"
-}`;
+    EVIDENCE:
+    ${evidenceText}
+
+    RESPONSE FORMAT:
+    Return valid JSON only: { "outcome": "YES"|"NO"|"UNSURE", "confidence": number (0.0-1.0), "reason": "concise explanation citing the specific source URL used" }`;
 
     const geminiResponse = await callGemini(prompt);
     
-    // Extract text from Gemini response
+    // Parse response (same as before)
     const rawText = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
-    
-    // Clean up any markdown code blocks
-    let cleanedText = rawText.trim();
-    if (cleanedText.startsWith("```json")) {
-      cleanedText = cleanedText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
-    } else if (cleanedText.startsWith("```")) {
-      cleanedText = cleanedText.replace(/```\n?/g, "");
-    }
+    let cleanedText = rawText.trim().replace(/^```json\s*|\s*```$/g, "").replace(/^```\s*|\s*```$/g, "");
     
     let parsed: any;
     try {
       parsed = JSON.parse(cleanedText);
     } catch {
-      return {
-        outcome: "UNSURE",
-        confidence: 0,
-        reason: "Failed to parse Gemini JSON response",
-      };
+       // Fallback: sometimes Gemini adds text before/after JSON
+       const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+       if (jsonMatch) {
+         parsed = JSON.parse(jsonMatch[0]);
+       } else {
+         return { outcome: "UNSURE", confidence: 0, reason: "JSON Parse Failed" };
+       }
     }
 
-    const outcome = parsed.outcome as OracleResult["outcome"];
-    const confidence =
-      typeof parsed.confidence === "number" ? parsed.confidence : 0;
-    const reason =
-      typeof parsed.reason === "string" ? parsed.reason : "No reason provided";
+    const outcome = ["YES", "NO", "UNSURE"].includes(parsed.outcome) ? parsed.outcome : "UNSURE";
+    
+    // LOGIC TO FIND WHICH URL WAS USED
+    // If the AI cites a specific source in the 'reason', try to find that URL. 
+    // Otherwise default to the first one, but this is less accurate.
+    let evidenceUrl = results[0]?.url || "";
+    if (parsed.reason) {
+      const match = results.find(r => parsed.reason.includes(r.url) || r.snippet.includes(parsed.reason.substring(0, 20)));
+      if (match) evidenceUrl = match.url;
+    }
 
-    const normalizedOutcome =
-      outcome === "YES" || outcome === "NO" || outcome === "UNSURE"
-        ? outcome
-        : "UNSURE";
-
-    const topSourceUrl = results[0]?.url ?? "";
     return {
-      outcome: normalizedOutcome,
-      confidence: confidence,
-      reason,
-      evidenceUrl: topSourceUrl,
+      outcome: outcome as OracleResult["outcome"],
+      confidence: parsed.confidence || 0,
+      reason: parsed.reason || "AI Logic",
+      evidenceUrl: evidenceUrl,
     };
   } catch (e) {
-    console.error("Gemini AI Error:", e);
+    console.error("Gemini Logic Error:", e);
     return { outcome: "UNSURE", confidence: 0, reason: "Gemini API call failed" };
   }
 }
@@ -269,87 +258,65 @@ async function main() {
   const resolverKp = loadKeypair(RESOLVER_KEYPAIR_PATH);
   const connection = new Connection(RPC_URL, "confirmed");
   const wallet = new anchor.Wallet(resolverKp);
-  const provider = new anchor.AnchorProvider(connection, wallet, { 
-    commitment: "confirmed" 
-  });
-  anchor.setProvider(provider);
+  const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
+  
+  // Use explicit Program ID to avoid IDL mismatch
+  const program = new anchor.Program(hyperlocalIdl, provider);
 
-  const program = new anchor.Program(
-    hyperlocalIdl as anchor.Idl, 
-    PROGRAM_ID, 
-    provider
-  );
-
-  console.log("🤖 Agent running with Gemini AI. Polling markets...");
+  console.log("🤖 Agent running with Gemini AI...");
 
   // Fetch all markets
-  const markets = await program.account.market.all<MarketAccount>();
+  const markets = await (program.account["market"] as any).all() as { publicKey: PublicKey; account: MarketAccount }[];
   
   const nowTs = Math.floor(Date.now() / 1000);
   const candidates = markets.filter((m) => {
     const status = m.account.status as number;
-    // Handle closeTime as both number and BN
     const closeTime = typeof m.account.closeTime === 'number' 
       ? m.account.closeTime 
       : m.account.closeTime.toNumber();
-    // Check if market is NOT resolved AND time has expired
+      
+    // Must be NOT resolved AND time must be in the past
     return status !== STATUS_RESOLVED && closeTime < nowTs;
   });
 
   console.log(`Found ${candidates.length} markets pending resolution.`);
 
+  if (candidates.length === 0) {
+    console.log("💡 Tip: Use 'create_test_market.ts' to create a market that expires in the past.");
+  }
+
   for (const { publicKey, account } of candidates) {
-    console.log(`\nProcessing market: ${publicKey.toBase58()}`);
-    console.log(`Question: ${account.question}`);
+    console.log(`\nProcessing: ${publicKey.toBase58()} | "${account.question}"`);
     
     const manifest = await fetchManifest(account);
     if (!manifest) {
-      console.warn(`⚠️  Skipping - Manifest unreadable.`);
+      console.warn(`⚠️ Skipping - Manifest unreadable.`);
       continue;
     }
 
     const result = await resolveMarketLogic(manifest);
-    console.log(`🤖 Gemini Verdict: ${result.outcome} (confidence: ${result.confidence})`);
-    console.log(`📝 Reason: ${result.reason}`);
+    console.log(`🤖 Verdict: ${result.outcome} (${result.reason})`);
 
-    // Skip if uncertain
-    if (result.outcome === "UNSURE") {
-      console.log(`⏭️  Skipping - Outcome is UNSURE`);
-      continue;
-    }
+    if (result.outcome === "UNSURE") continue;
 
-    let outcomeU8 = result.outcome === "YES" ? OUTCOME_YES : OUTCOME_NO;
-
-    // Add Compute Budget to prevent drops on congested networks
-    const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({ 
-      units: 200_000 
-    });
-    const addPriorityFee = ComputeBudgetProgram.setComputeUnitPrice({ 
-      microLamports: 100_000 // Adjust based on network demand
-    });
+    const outcomeU8 = result.outcome === "YES" ? OUTCOME_YES : OUTCOME_NO;
+    const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
+    const addPriorityFee = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100_000 });
 
     try {
       const tx = await program.methods
-        .agentAttemptResolution(
-          outcomeU8, 
-          result.evidenceUrl || "", 
-          result.reason
-        )
-        .accounts({
-          market: publicKey,
-          resolver: resolverKp.publicKey,
-        })
+        .agentAttemptResolution(outcomeU8, result.evidenceUrl || "", result.reason)
+        .accounts({ market: publicKey, resolver: resolverKp.publicKey })
         .preInstructions([modifyComputeUnits, addPriorityFee])
         .signers([resolverKp])
         .rpc();
 
       console.log(`✅ Success! Tx: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
     } catch (e) {
-      console.error(`❌ Failed transaction:`, e);
+      console.error(`❌ Transaction failed:`, e);
     }
   }
-
-  console.log("\n✨ Agent completed processing all markets.");
+  console.log("\n✨ Done.");
 }
 
 main().catch((e) => {

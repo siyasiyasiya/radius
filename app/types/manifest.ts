@@ -23,6 +23,7 @@ export interface OracleResult {
   outcome: "YES" | "NO" | "UNSURE";
   confidence: number; // 0.0 to 1.0
   reason: string;
+  evidenceUrl?: string;
 }
 
 // Basic guard to validate a loaded manifest shape.
