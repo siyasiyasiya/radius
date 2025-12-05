@@ -1,23 +1,21 @@
 pragma circom 2.1.4;
 
-include "circomlib/circuits/comparators.circom";
-include "circomlib/circuits/poseidon.circom";
+include "node_modules/circomlib/circuits/comparators.circom";
+include "node_modules/circomlib/circuits/poseidon.circom";
 
-// Proves (userLat, userLon) is inside a bounding box.
-// Coordinates are scaled integers (e.g., degrees * 1e6).
 template SpatialCheck() {
-    // Public signals: bounding box (min/max lat/lon)
+    // Public inputs (bounding box)
     signal input minLat;
     signal input maxLat;
     signal input minLon;
     signal input maxLon;
-
-    // Private signals
+    
+    // Private inputs
     signal input userLat;
     signal input userLon;
     signal input salt;
 
-    // minLat <= userLat <= maxLat
+    // Range checks
     component latLower = LessEqThan(64);
     latLower.in[0] <== minLat;
     latLower.in[1] <== userLat;
@@ -28,7 +26,6 @@ template SpatialCheck() {
     latUpper.in[1] <== maxLat;
     latUpper.out === 1;
 
-    // minLon <= userLon <= maxLon
     component lonLower = LessEqThan(64);
     lonLower.in[0] <== minLon;
     lonLower.in[1] <== userLon;
@@ -38,6 +35,15 @@ template SpatialCheck() {
     lonUpper.in[0] <== userLon;
     lonUpper.in[1] <== maxLon;
     lonUpper.out === 1;
+
+    // Create nullifier with Poseidon
+    component hash = Poseidon(3);
+    hash.inputs[0] <== userLat;
+    hash.inputs[1] <== userLon;
+    hash.inputs[2] <== salt;
+
+    signal output locationNullifier;
+    locationNullifier <== hash.out;
 }
 
-component main { public [minLat, maxLat, minLon, maxLon] } = SpatialCheck();
+component main {public [minLat, maxLat, minLon, maxLon]} = SpatialCheck();
