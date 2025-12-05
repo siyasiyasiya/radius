@@ -45,6 +45,14 @@ const REGIONS = {
     minLon: -83.1,
     maxLon: -83.0,
   },
+  // Dynamic region that will be created based on user's actual location
+  "current-location": {
+    name: "Current Location",
+    minLat: 0,
+    maxLat: 0,
+    minLon: 0,
+    maxLon: 0,
+  },
 };
 
 export default function Page() {
@@ -101,14 +109,20 @@ export default function Page() {
     setIsDetecting(true);
     try {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject);
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        });
       });
 
       const { latitude, longitude } = position.coords;
+      console.log("Browser location detected:", { latitude, longitude });
 
+      // First check if user is in a predefined region
       let foundRegion: any = null;
-
       for (const [regionId, bounds] of Object.entries(REGIONS)) {
+        if (regionId === "current-location") continue; // Skip dynamic region
         if (
           latitude >= bounds.minLat &&
           latitude <= bounds.maxLat &&
@@ -125,35 +139,43 @@ export default function Page() {
         }
       }
 
-      if (foundRegion) {
-        setDetectedRegion(foundRegion);
-      } else {
-        setDetectedRegion({
-          id: "west-lafayette",
-          ...REGIONS["west-lafayette"],
-          userLat: 40.45,
-          userLon: -86.9,
-        });
+      // If not in a predefined region, create a dynamic bounding box around user's location
+      if (!foundRegion) {
+        // Create a ~0.1 degree (~11km) bounding box around the user
+        const BBOX_SIZE = 0.05; // ~5.5km radius
+        foundRegion = {
+          id: "current-location",
+          name: "Your Location",
+          minLat: latitude - BBOX_SIZE,
+          maxLat: latitude + BBOX_SIZE,
+          minLon: longitude - BBOX_SIZE,
+          maxLon: longitude + BBOX_SIZE,
+          userLat: latitude,
+          userLon: longitude,
+        };
+        console.log("Created dynamic region:", foundRegion);
       }
+
+      setDetectedRegion(foundRegion);
     } catch (error) {
       console.error("Location detection failed:", error);
-      setDetectedRegion({
-        id: "west-lafayette",
-        ...REGIONS["west-lafayette"],
-        userLat: 40.45,
-        userLon: -86.9,
-      });
+      alert("Location detection failed. Please allow location access and try again.");
     }
     setIsDetecting(false);
   };
 
   const generateZKProof = async () => {
-    if (!detectedRegion) return;
+    if (!detectedRegion) {
+      alert("Please detect your location first");
+      return;
+    }
 
     setIsProvingLocation(true);
     try {
+      console.log("Generating ZK proof for region:", detectedRegion);
+      
       const salt = Math.floor(Math.random() * 1_000_000);
-      const proof = await proveLocation({
+      const proofInput = {
         userLat: detectedRegion.userLat,
         userLon: detectedRegion.userLon,
         minLat: detectedRegion.minLat,
@@ -161,25 +183,55 @@ export default function Page() {
         minLon: detectedRegion.minLon,
         maxLon: detectedRegion.maxLon,
         salt,
-      });
+      };
+      console.log("Proof input:", proofInput);
+      
+      const proof = await proveLocation(proofInput);
+      console.log("ZK Proof generated successfully:", proof);
 
-      setLocationProof({
-        region: detectedRegion.id,
-        proof: proof.proofPacked,
-        publicInputs: proof.publicInputsPacked,
-        validUntil: Date.now() + 24 * 60 * 60 * 1000,
-      });
-
-      if (!wallet.publicKey) throw new Error("Wallet not connected");
-      const submitRes = await submitLocationProof(
-        wallet,
-        proof.proofPacked,
-        proof.publicInputsPacked
-      );
-      setUserStatePda(submitRes.userStatePda.toBase58());
-    } catch (error) {
+      if (!wallet.publicKey) {
+        alert("Please connect your wallet first");
+        setIsProvingLocation(false);
+        return;
+      }
+      
+      console.log("Submitting proof to blockchain...");
+      console.log("Wallet public key:", wallet.publicKey.toBase58());
+      console.log("Proof packed:", proof.proofPacked);
+      console.log("Public inputs packed:", proof.publicInputsPacked);
+      
+      try {
+        const submitRes = await submitLocationProof(
+          wallet,
+          proof.proofPacked,
+          proof.publicInputsPacked
+        );
+        
+        console.log("Blockchain submission successful:", submitRes);
+        setUserStatePda(submitRes.userStatePda.toBase58());
+        
+        // Only set locationProof AFTER successful blockchain submission
+        setLocationProof({
+          region: detectedRegion.id,
+          proof: proof.proofPacked,
+          publicInputs: proof.publicInputsPacked,
+          validUntil: Date.now() + 24 * 60 * 60 * 1000,
+        });
+      } catch (submitError: any) {
+        console.error("Blockchain submission failed:", submitError);
+        console.error("Error name:", submitError?.name);
+        console.error("Error message:", submitError?.message);
+        
+        // Check if it's a simulation error with logs
+        if (submitError?.logs) {
+          console.error("Transaction logs:", submitError.logs);
+        }
+        
+        alert(`Blockchain submission failed: ${submitError?.message || "Unknown error"}`);
+      }
+    } catch (error: any) {
       console.error("ZK proof generation failed:", error);
-      alert("Proof generation failed. Check console for details.");
+      alert(`Proof generation failed: ${error?.message || "Check console for details."}`);
     }
     setIsProvingLocation(false);
   };
@@ -241,11 +293,7 @@ export default function Page() {
                 ✓ Location Verified
               </p>
               <p className="text-xs text-slate-400">
-                {
-                  REGIONS[
-                    locationProof.region as keyof typeof REGIONS
-                  ]?.name
-                }
+                {detectedRegion?.name || "Your Location"}
               </p>
               <p className="text-[10px] text-slate-500 mt-2">
                 Valid until{" "}
@@ -254,7 +302,12 @@ export default function Page() {
             </div>
           )}
 
-          <SideBlock />
+          <SideBlock 
+            regionName={detectedRegion?.name}
+            userLat={detectedRegion?.userLat}
+            userLon={detectedRegion?.userLon}
+            isVerified={!!locationProof}
+          />
         </aside>
 
         <main className="flex-1 p-6 md:p-10 space-y-8">
@@ -275,13 +328,8 @@ export default function Page() {
                   Verify Your Location
                 </h2>
                 <p className="text-slate-400 mb-6">
-                  Generate a zero knowledge proof that you are in{" "}
-                  {detectedRegion
-                    ? REGIONS[
-                        detectedRegion.id as keyof typeof REGIONS
-                      ]?.name
-                    : "a supported region"}{" "}
-                  without revealing your exact address.
+                  Generate a zero knowledge proof of your location
+                  without revealing your exact coordinates.
                 </p>
 
                 {!detectedRegion ? (
@@ -297,13 +345,12 @@ export default function Page() {
                 ) : (
                   <div>
                     <div className="bg-sky-500/20 border border-sky-400 rounded-lg p-4 mb-6">
-                      <p className="font-semibold mb-1">Location Detected</p>
+                      <p className="font-semibold mb-1">📍 Location Detected</p>
                       <p className="text-sm text-slate-300">
-                        {
-                          REGIONS[
-                            detectedRegion.id as keyof typeof REGIONS
-                          ]?.name
-                        }
+                        {detectedRegion.name || "Your Location"}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {detectedRegion.userLat?.toFixed(4)}°, {detectedRegion.userLon?.toFixed(4)}°
                       </p>
                     </div>
                     <button
@@ -326,11 +373,7 @@ export default function Page() {
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <h2 className="text-xl md:text-2xl font-semibold tracking-tight">
-                    {
-                      REGIONS[
-                        locationProof.region as keyof typeof REGIONS
-                      ]?.name
-                    }
+                    {detectedRegion?.name || locationProof.region}
                   </h2>
                   <p className="text-sm text-slate-400">
                     {filteredMarkets.length} local markets available

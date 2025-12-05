@@ -102,7 +102,12 @@ export async function submitLocationProof(
     ZK_LOCATION_PROGRAM_ID
   );
 
+  console.log("Building transaction...");
+  console.log("User state PDA:", userStatePda.toBase58());
+  console.log("Program ID:", ZK_LOCATION_PROGRAM_ID.toBase58());
+
   const data = buildSubmitLocationProofData(proofPacked, publicInputsPacked);
+  console.log("Instruction data length:", data.length);
 
   const keys = [
     { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
@@ -117,8 +122,39 @@ export async function submitLocationProof(
   });
 
   const tx = new Transaction().add(ix);
+  
+  // Set required transaction fields
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = wallet.publicKey;
+
+  console.log("Transaction built, sending to wallet...");
+  console.log("Blockhash:", blockhash);
+
+  // First simulate the transaction to get better error messages
+  try {
+    const simulation = await connection.simulateTransaction(tx);
+    console.log("Simulation result:", simulation);
+    if (simulation.value.err) {
+      console.error("Simulation failed:", simulation.value.err);
+      console.error("Simulation logs:", simulation.value.logs);
+      throw new Error(`Transaction simulation failed: ${JSON.stringify(simulation.value.err)}`);
+    }
+  } catch (simError: any) {
+    console.error("Simulation error:", simError);
+    // Continue anyway - simulation might fail but tx might succeed
+  }
 
   const txSig = await wallet.sendTransaction(tx, connection);
+  console.log("Transaction sent:", txSig);
+  
+  // Wait for confirmation
+  await connection.confirmTransaction({
+    signature: txSig,
+    blockhash,
+    lastValidBlockHeight,
+  });
 
+  console.log("Transaction confirmed!");
   return { txSig, userStatePda };
 }
