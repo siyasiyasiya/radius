@@ -7,6 +7,10 @@ declare_id!("8pkLV5wpiXFTu9VGwhDMdUESp1RkQUPfa8CyqT2bKket");
 
 pub const ZK_LOCATION_PROGRAM_ID: Pubkey = pubkey!("Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD");
 pub const MAX_QUESTION_LEN: usize = 128;
+pub const MAX_URL_LEN: usize = 256;
+pub const OUTCOME_NONE: u8 = 0;
+pub const OUTCOME_YES: u8 = 1;
+pub const OUTCOME_NO: u8 = 2;
 
 #[program]
 pub mod hyperlocal_markets {
@@ -17,6 +21,8 @@ pub mod hyperlocal_markets {
         region_id: [u8; 32],
         question: String,
         close_time: i64,
+        manifest_url: String,
+        manifest_hash: [u8; 32],
     ) -> Result<()> {
         require!(
             question.as_bytes().len() <= MAX_QUESTION_LEN,
@@ -39,6 +45,11 @@ pub mod hyperlocal_markets {
         market.yes_shares = 1;
         market.no_shares = 1;
         market.total_pool = 0;
+        market.manifest_url = manifest_url;
+        market.manifest_hash = manifest_hash;
+        market.resolved_evidence_url = "".to_string();
+        market.status = ResolutionStatus::Open;
+        market.agent_outcome = OUTCOME_NONE;
         Ok(())
     }
 
@@ -215,6 +226,65 @@ pub mod hyperlocal_markets {
         Ok(())
     }
 
+    pub fn agent_attempt_resolution(
+        ctx: Context<AgentAttemptResolution>,
+        outcome: u8,
+        evidence: String,
+        reason: String,
+    ) -> Result<()> {
+        let market = &mut ctx.accounts.market;
+
+        market.agent_outcome = outcome;
+        market.resolved_evidence_url = evidence.clone();
+
+        if outcome == OUTCOME_YES || outcome == OUTCOME_NO {
+            market.outcome = outcome;
+            market.resolved = true;
+            market.status = ResolutionStatus::Resolved;
+        } else {
+            market.status = ResolutionStatus::Disputed;
+        }
+
+        emit!(MarketResolved {
+            market: market.key(),
+            outcome,
+            evidence_url: evidence,
+            is_agent: true,
+            reason,
+        });
+        Ok(())
+    }
+
+    pub fn creator_resolve_market(
+        ctx: Context<CreatorResolveMarket>,
+        outcome: u8,
+        evidence: String,
+    ) -> Result<()> {
+        let market = &mut ctx.accounts.market;
+        let signer = &ctx.accounts.signer;
+
+        require_keys_eq!(market.creator, signer.key(), MarketError::UnauthorizedCreator);
+        require!(
+            outcome == OUTCOME_YES || outcome == OUTCOME_NO,
+            MarketError::InvalidOutcome
+        );
+
+        market.outcome = outcome;
+        market.resolved = true;
+        market.agent_outcome = outcome;
+        market.status = ResolutionStatus::Resolved;
+        market.resolved_evidence_url = evidence.clone();
+
+        emit!(MarketResolved {
+            market: market.key(),
+            outcome,
+            evidence_url: evidence,
+            is_agent: false,
+            reason: "CREATOR_OVERRIDE".to_string(),
+        });
+        Ok(())
+    }
+
     pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
         let market = &mut ctx.accounts.market;
         require!(market.resolved, MarketError::NotResolved);
@@ -261,7 +331,7 @@ pub mod hyperlocal_markets {
 }
 
 #[derive(Accounts)]
-#[instruction(region_id: [u8; 32], question: String, close_time: i64)]
+#[instruction(region_id: [u8; 32], question: String, close_time: i64, manifest_url: String, manifest_hash: [u8; 32])]
 pub struct CreateMarket<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -352,6 +422,22 @@ pub struct Claim<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AgentAttemptResolution<'info> {
+    #[account(mut, has_one = resolver)]
+    pub market: Account<'info, Market>,
+    /// CHECK: resolver authority (AI agent)
+    #[account(signer)]
+    pub resolver: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CreatorResolveMarket<'info> {
+    #[account(mut)]
+    pub market: Account<'info, Market>,
+    pub signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct EmergencyWithdraw<'info> {
     pub resolver: Signer<'info>,
     #[account(
@@ -383,10 +469,15 @@ pub struct Market {
     pub creator: Pubkey,
     pub market_bump: u8,
     pub question_hash: [u8; 32],
+    pub manifest_url: String,
+    pub manifest_hash: [u8; 32],
+    pub resolved_evidence_url: String,
+    pub status: ResolutionStatus,
+    pub agent_outcome: u8,
 }
 
 impl Market {
-    pub const SIZE: usize = 375;
+    pub const SIZE: usize = 1000;
 }
 
 #[account]
@@ -429,6 +520,22 @@ pub enum Outcome {
     No,
 }
 
+#[event]
+pub struct MarketResolved {
+    pub market: Pubkey,
+    pub outcome: u8,
+    pub evidence_url: String,
+    pub is_agent: bool,
+    pub reason: String,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum ResolutionStatus {
+    Open,
+    Disputed,
+    Resolved,
+}
+
 #[error_code]
 pub enum MarketError {
     #[msg("Location proof not present")]
@@ -455,6 +562,10 @@ pub enum MarketError {
     SlippageExceeded,
     #[msg("No winning-side liquidity")]
     NoWinningLiquidity,
+    #[msg("Unauthorized creator")]
+    UnauthorizedCreator,
+    #[msg("Invalid outcome")]
+    InvalidOutcome,
 }
 
 fn question_hash(question: &str) -> [u8; 32] {
