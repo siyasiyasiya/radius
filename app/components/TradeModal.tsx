@@ -9,6 +9,8 @@ type Market = {
   resolved: boolean;
   outcome: number;
   closeTime: number;
+  yesPrice: number;
+  noPrice: number;
 };
 
 type Props = {
@@ -116,6 +118,34 @@ export default function TradeModal({
             />
           </div>
 
+          {/* Price & Returns Info */}
+          {amount && parseFloat(amount) > 0 && (
+            <div className="bg-slate-800/50 rounded-lg p-4 space-y-2 border border-slate-700">
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-400">Current Price</span>
+                <span className="font-medium">
+                  {((side === "yes" ? market.yesPrice : market.noPrice) * 100).toFixed(0)}¢ per share
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-400">Shares you'll get</span>
+                <span className="font-medium">
+                  ~{(parseFloat(amount) / (side === "yes" ? market.yesPrice : market.noPrice)).toFixed(2)}
+                </span>
+              </div>
+              <div className="border-t border-slate-700 my-2"></div>
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-400">Potential Return (if {side.toUpperCase()} wins)</span>
+                <span className={`font-bold ${side === "yes" ? "text-emerald-400" : "text-red-400"}`}>
+                  ${(parseFloat(amount) / (side === "yes" ? market.yesPrice : market.noPrice)).toFixed(2)}
+                  <span className="text-slate-500 font-normal ml-1">
+                    (+{(((1 / (side === "yes" ? market.yesPrice : market.noPrice)) - 1) * 100).toFixed(0)}%)
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Slippage */}
           <div>
             <label className="text-xs uppercase tracking-wide text-slate-500 mb-2 block">
@@ -143,9 +173,13 @@ export default function TradeModal({
           <button
             type="submit"
             disabled={isSubmitting || !amount}
-            className="w-full py-4 rounded-xl font-bold text-lg bg-sky-500 hover:bg-sky-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className={`w-full py-4 rounded-xl font-bold text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+              side === "yes" 
+                ? "bg-emerald-500 hover:bg-emerald-400" 
+                : "bg-red-500 hover:bg-red-400"
+            }`}
           >
-            {isSubmitting ? "Submitting..." : `Buy ${side.toUpperCase()}`}
+            {isSubmitting ? "Submitting..." : `Buy ${side.toUpperCase()} @ ${((side === "yes" ? market.yesPrice : market.noPrice) * 100).toFixed(0)}¢`}
           </button>
         </form>
 

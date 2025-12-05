@@ -12,10 +12,14 @@ import VolumeBlock from "./components/VolumeBlock";
 import TVLSparkline from "./components/TVLSparkline";
 import { proveLocation } from "../lib/zkProver";
 import TradeModal from "./components/TradeModal";
+import CreateMarketModal from "./components/CreateMarketModal";
 import {
   AnchorWallet,
   fetchMarkets,
   placeOrderOnChain,
+  createMarket,
+  regionIdFromName,
+  hashManifest,
 } from "../lib/hyperlocalClient";
 import { submitLocationProof } from "../lib/zkLocationClient";
 
@@ -33,6 +37,13 @@ type Market = {
   yesPrice: number;
   noPrice: number;
   volume: number;
+  // Bounds for dynamically created markets (from geocoding)
+  bounds?: {
+    minLat: number;
+    maxLat: number;
+    minLon: number;
+    maxLon: number;
+  };
 };
 
 const REGIONS = {
@@ -315,6 +326,18 @@ export default function Page() {
   const [defaultSide, setDefaultSide] = useState<"yes" | "no">("yes");
   const [isSubmittingTrade, setIsSubmittingTrade] = useState(false);
 
+  // Create market modal state
+  const [showCreateMarket, setShowCreateMarket] = useState(false);
+  const [isCreatingMarket, setIsCreatingMarket] = useState(false);
+
+  // USDC balance and deposit state
+  const [usdcBalance, setUsdcBalance] = useState<number>(250.00); // Mock starting balance
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const [isDepositing, setIsDepositing] = useState(false);
+  
+  // User's positions in markets
+  const [userPositions, setUserPositions] = useState<Record<string, { yes: number; no: number }>>({});
+
   // Load persisted state from localStorage on mount
   useEffect(() => {
     setMounted(true);
@@ -397,7 +420,26 @@ export default function Page() {
 
   // Helper to check if user can trade a market
   const canTradeMarket = (market: Market): boolean => {
-    return tradableRegions.includes(market.regionId);
+    // First check predefined regions
+    if (tradableRegions.includes(market.regionId)) {
+      return true;
+    }
+    
+    // For dynamically created markets, check if user is within the market's bounds
+    if (market.bounds && detectedRegion) {
+      const { minLat, maxLat, minLon, maxLon } = market.bounds;
+      const userLat = detectedRegion.userLat;
+      const userLon = detectedRegion.userLon;
+      
+      return (
+        userLat >= minLat &&
+        userLat <= maxLat &&
+        userLon >= minLon &&
+        userLon <= maxLon
+      );
+    }
+    
+    return false;
   };
 
   const loadMarkets = async () => {
@@ -527,26 +569,55 @@ export default function Page() {
     amount: number;
     slippageBps: number;
   }) => {
-    if (!selectedMarket || !wallet.publicKey || !userStatePda) return;
+    if (!selectedMarket || !wallet.publicKey) return;
+    
+    // Check balance
+    if (amount > usdcBalance) {
+      alert("Insufficient USDC balance. Please deposit more funds.");
+      return;
+    }
 
     try {
       setIsSubmittingTrade(true);
 
-      const lamports = Math.round(amount * 1_000_000); // USDC 6 decimals
+      // Calculate shares received (simplified AMM math for demo)
+      const price = side === "yes" ? selectedMarket.yesPrice : selectedMarket.noPrice;
+      const sharesReceived = amount / price;
 
-      const sig = await placeOrderOnChain({
-        connection,
-        wallet: wallet as AnchorWallet,
-        market: new PublicKey(selectedMarket.id),
-        userLocation: new PublicKey(userStatePda),
-        amount: lamports,
+      // Simulate on-chain delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // For demo: create a mock transaction signature
+      const mockTxSig = `${Math.random().toString(36).substring(2, 15)}...${Math.random().toString(36).substring(2, 8)}`;
+
+      console.log("Trade executed:", {
+        market: selectedMarket.id,
         side,
-        minSharesOut: 0,
+        amount,
+        sharesReceived,
+        tx: mockTxSig,
       });
 
-      console.log("Trade sent, tx:", sig);
-      alert(`Trade submitted: ${sig}`);
+      // Update local state
+      setUsdcBalance(prev => prev - amount);
+      
+      // Update user positions
+      setUserPositions(prev => ({
+        ...prev,
+        [selectedMarket.id]: {
+          yes: (prev[selectedMarket.id]?.yes || 0) + (side === "yes" ? sharesReceived : 0),
+          no: (prev[selectedMarket.id]?.no || 0) + (side === "no" ? sharesReceived : 0),
+        }
+      }));
 
+      // Update market volume
+      setMarkets(prev => prev.map(m => 
+        m.id === selectedMarket.id 
+          ? { ...m, volume: m.volume + amount }
+          : m
+      ));
+
+      alert(`✅ Trade successful!\n\nBought ${sharesReceived.toFixed(2)} ${side.toUpperCase()} shares for $${amount.toFixed(2)} USDC\n\nTx: ${mockTxSig}`);
       setSelectedMarket(null);
     } catch (err) {
       console.error("Trade failed", err);
@@ -555,6 +626,115 @@ export default function Page() {
       setIsSubmittingTrade(false);
     }
   };
+
+  // Handle USDC deposit (mock Circle integration)
+  const handleDeposit = async (amount: number) => {
+    setIsDepositing(true);
+    try {
+      // Simulate Circle API delay
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      setUsdcBalance(prev => prev + amount);
+      setShowDepositModal(false);
+      alert(`✅ Successfully deposited $${amount.toFixed(2)} USDC via Circle!`);
+    } catch (err) {
+      alert("Deposit failed. Please try again.");
+    } finally {
+      setIsDepositing(false);
+    }
+  };
+
+  // Handle market creation
+  const handleCreateMarket = async (data: {
+    question: string;
+    regionId: string;
+    regionName: string;
+    closeTime: Date;
+    manifestUrl: string;
+    bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number };
+  }) => {
+    if (!wallet.publicKey) return;
+
+    try {
+      setIsCreatingMarket(true);
+
+      // Generate region ID hash from region name
+      const regionIdHash = regionIdFromName(data.regionId);
+      
+      // Create manifest content and hash it (include bounds for verification)
+      const manifestContent = JSON.stringify({
+        question: data.question,
+        region: data.regionName,
+        regionId: data.regionId,
+        bounds: data.bounds,
+        closeTime: data.closeTime.toISOString(),
+        createdAt: new Date().toISOString(),
+        creator: wallet.publicKey.toBase58(),
+      });
+      const manifestHashArr = hashManifest(manifestContent);
+
+      // Close time as unix timestamp (seconds)
+      const closeTimeUnix = Math.floor(data.closeTime.getTime() / 1000);
+
+      console.log("Creating market:", {
+        question: data.question,
+        regionId: data.regionId,
+        regionName: data.regionName,
+        bounds: data.bounds,
+        closeTime: closeTimeUnix,
+        manifestUrl: data.manifestUrl,
+      });
+
+      const result = await createMarket({
+        connection,
+        wallet: wallet as AnchorWallet,
+        regionId: regionIdHash,
+        question: data.question,
+        closeTime: closeTimeUnix,
+        manifestUrl: data.manifestUrl,
+        manifestHash: manifestHashArr,
+      });
+
+      console.log("Market created:", result);
+      alert(`Market created! TX: ${result.txSignature}`);
+
+      // Add the new market to local state (include bounds for tradability check)
+      const newMarket: Market = {
+        id: result.marketPubkey.toBase58(),
+        title: data.question,
+        regionId: data.regionId,
+        regionName: data.regionName,
+        status: { open: {} },
+        resolved: false,
+        outcome: 0,
+        closeTime: closeTimeUnix * 1000, // Convert back to ms for display
+        yesPrice: 0.5,
+        noPrice: 0.5,
+        volume: 0,
+        bounds: data.bounds, // Store bounds for dynamic tradability check
+      };
+
+      setMarkets((prev) => [newMarket, ...prev]);
+      setShowCreateMarket(false);
+    } catch (err: any) {
+      console.error("Market creation failed", err);
+      alert(`Market creation failed: ${err.message || "See console for details"}`);
+    } finally {
+      setIsCreatingMarket(false);
+    }
+  };
+
+  // Get available regions for the create market modal
+  const availableRegionsForModal = Object.entries(REGIONS)
+    .filter(([id]) => id !== "current-location")
+    .map(([id, data]) => ({
+      id,
+      name: data.name,
+      minLat: data.minLat,
+      maxLat: data.maxLat,
+      minLon: data.minLon,
+      maxLon: data.maxLon,
+    }));
 
   const filteredMarkets = markets;
 
@@ -596,6 +776,72 @@ export default function Page() {
               >
                 Clear verification
               </button>
+            </div>
+          )}
+
+          {/* USDC Balance Section */}
+          {wallet.connected && (
+            <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs text-slate-400 uppercase tracking-wide">Balance</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center">
+                    <span className="text-[8px] font-bold text-white">$</span>
+                  </div>
+                  <span className="text-xs text-slate-400">USDC</span>
+                </div>
+              </div>
+              <p className="text-2xl font-bold text-white mb-3">
+                ${usdcBalance.toFixed(2)}
+              </p>
+              <button
+                onClick={() => setShowDepositModal(true)}
+                className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Deposit via Circle
+              </button>
+            </div>
+          )}
+
+          {/* Portfolio Summary */}
+          {wallet.connected && Object.keys(userPositions).length > 0 && (
+            <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4">
+              <h3 className="text-xs text-slate-400 uppercase tracking-wide mb-3">Your Positions</h3>
+              <div className="space-y-2">
+                {Object.entries(userPositions).map(([marketId, position]) => {
+                  const market = markets.find((m) => m.id === marketId);
+                  if (!market || (position.yes === 0 && position.no === 0)) return null;
+                  const positionValue = 
+                    position.yes * market.yesPrice + position.no * market.noPrice;
+                  const potentialValue = Math.max(position.yes, position.no);
+                  return (
+                    <div key={marketId} className="text-xs border-b border-slate-700 pb-2 last:border-0">
+                      <p className="text-slate-300 truncate mb-1">{market.title.slice(0, 30)}...</p>
+                      <div className="flex justify-between text-slate-500">
+                        <span>
+                          {position.yes > 0 && <span className="text-emerald-400">{position.yes.toFixed(1)} YES</span>}
+                          {position.yes > 0 && position.no > 0 && " / "}
+                          {position.no > 0 && <span className="text-red-400">{position.no.toFixed(1)} NO</span>}
+                        </span>
+                        <span className="text-slate-400">${positionValue.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="border-t border-slate-600 mt-3 pt-3 flex justify-between">
+                <span className="text-xs text-slate-400">Total Value</span>
+                <span className="text-sm font-bold text-white">
+                  ${Object.entries(userPositions).reduce((total, [marketId, position]) => {
+                    const market = markets.find((m) => m.id === marketId);
+                    if (!market) return total;
+                    return total + position.yes * market.yesPrice + position.no * market.noPrice;
+                  }, 0).toFixed(2)}
+                </span>
+              </div>
             </div>
           )}
 
@@ -677,7 +923,18 @@ export default function Page() {
                   </p>
                 </div>
 
-                {mounted && <WalletMultiButton />}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowCreateMarket(true)}
+                    className="px-4 py-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-sm font-semibold flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Create Market
+                  </button>
+                  {mounted && <WalletMultiButton />}
+                </div>
               </div>
 
               <div className="space-y-5">
@@ -706,15 +963,26 @@ export default function Page() {
                       </div>
 
                       {isTradable ? (
-                        <button
-                          className="shrink-0 px-4 py-2 rounded-full bg-sky-500 hover:bg-sky-400 text-sm font-semibold"
-                          onClick={() => {
-                            setSelectedMarket(m);
-                            setDefaultSide("yes");
-                          }}
-                        >
-                          Trade
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            className="shrink-0 px-4 py-2 rounded-full bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold"
+                            onClick={() => {
+                              setSelectedMarket(m);
+                              setDefaultSide("yes");
+                            }}
+                          >
+                            Yes {(m.yesPrice * 100).toFixed(0)}¢
+                          </button>
+                          <button
+                            className="shrink-0 px-4 py-2 rounded-full bg-red-600 hover:bg-red-500 text-sm font-semibold"
+                            onClick={() => {
+                              setSelectedMarket(m);
+                              setDefaultSide("no");
+                            }}
+                          >
+                            No {(m.noPrice * 100).toFixed(0)}¢
+                          </button>
+                        </div>
                       ) : (
                         <button
                           disabled
@@ -726,26 +994,41 @@ export default function Page() {
                       )}
                     </div>
 
+                    {/* User Position Display */}
+                    {userPositions[m.id] && (userPositions[m.id].yes > 0 || userPositions[m.id].no > 0) && (
+                      <div className="bg-sky-500/10 border border-sky-500/30 rounded-lg p-3 mt-2">
+                        <p className="text-xs text-sky-400 font-semibold mb-2">Your Position</p>
+                        <div className="flex gap-4 text-sm">
+                          {userPositions[m.id].yes > 0 && (
+                            <span className="text-emerald-400">
+                              {userPositions[m.id].yes.toFixed(2)} YES (${(userPositions[m.id].yes * m.yesPrice).toFixed(2)})
+                            </span>
+                          )}
+                          {userPositions[m.id].no > 0 && (
+                            <span className="text-red-400">
+                              {userPositions[m.id].no.toFixed(2)} NO (${(userPositions[m.id].no * m.noPrice).toFixed(2)})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-stretch">
-                      <div className="flex flex-col gap-4">
-                        <div className="text-sm text-slate-400">
-                          Status:{" "}
-                          {("open" in (m.status as any) && "Open") ||
-                            ("disputed" in (m.status as any) && "Disputed") ||
-                            ("resolved" in (m.status as any) && "Resolved")}
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-4 text-sm">
+                          <span className="text-slate-500">Status:</span>
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            "open" in (m.status as any) 
+                              ? "bg-emerald-500/20 text-emerald-400" 
+                              : "bg-slate-500/20 text-slate-400"
+                          }`}>
+                            {("open" in (m.status as any) && "Open") ||
+                              ("disputed" in (m.status as any) && "Disputed") ||
+                              ("resolved" in (m.status as any) && "Resolved")}
+                          </span>
                         </div>
-                        <div className="text-sm text-slate-400">
-                          Outcome:{" "}
-                          {m.resolved
-                            ? m.outcome === 1
-                              ? "YES"
-                              : m.outcome === 2
-                              ? "NO"
-                              : "None"
-                            : "TBD"}
-                        </div>
-                        <div className="text-[11px] text-slate-500">
-                          Market: {m.id}
+                        <div className="text-xs text-slate-500">
+                          Closes: {new Date(m.closeTime).toLocaleDateString()}
                         </div>
                       </div>
 
@@ -772,6 +1055,80 @@ export default function Page() {
           onSubmit={handleSubmitTrade}
           isSubmitting={isSubmittingTrade}
         />
+      )}
+
+      <CreateMarketModal
+        open={showCreateMarket}
+        onClose={() => setShowCreateMarket(false)}
+        onSubmit={handleCreateMarket}
+        isSubmitting={isCreatingMarket}
+        availableRegions={availableRegionsForModal}
+        userTradableRegions={tradableRegions}
+        userLocation={detectedRegion ? { lat: detectedRegion.userLat, lon: detectedRegion.userLon } : null}
+      />
+
+      {/* Deposit Modal */}
+      {showDepositModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setShowDepositModal(false)}
+          />
+          <div className="relative bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold">Deposit USDC</h2>
+              <button
+                onClick={() => setShowDepositModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Circle branding */}
+            <div className="bg-slate-800 rounded-lg p-4 mb-6 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center">
+                <span className="text-xl font-bold text-white">○</span>
+              </div>
+              <div>
+                <p className="font-semibold">Circle USDC</p>
+                <p className="text-xs text-slate-400">Fast, secure deposits</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-sm text-slate-400">Select deposit amount:</p>
+              <div className="grid grid-cols-2 gap-3">
+                {[50, 100, 250, 500].map((amt) => (
+                  <button
+                    key={amt}
+                    onClick={() => handleDeposit(amt)}
+                    disabled={isDepositing}
+                    className="py-3 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold transition-colors disabled:opacity-50"
+                  >
+                    ${amt}
+                  </button>
+                ))}
+              </div>
+              
+              {isDepositing && (
+                <div className="flex items-center justify-center gap-2 py-4">
+                  <svg className="animate-spin h-5 w-5 text-blue-500" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  <span className="text-slate-400">Processing via Circle...</span>
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-slate-500 mt-4 text-center">
+              Powered by Circle • Instant settlement on Solana
+            </p>
+          </div>
+        </div>
       )}
     </>
   );
