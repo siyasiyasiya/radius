@@ -3,7 +3,7 @@ use anchor_lang::solana_program::keccak;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("8pkLV5wpiXFTu9VGwhDMdUESp1RkQUPfa8CyqT2bKket");
+declare_id!("EA838rrQJPTmk4FNMRV4esgU7rFo5oRLGgW1Nws1jzox");
 
 pub const ZK_LOCATION_PROGRAM_ID: Pubkey = pubkey!("Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD");
 pub const MAX_QUESTION_LEN: usize = 128;
