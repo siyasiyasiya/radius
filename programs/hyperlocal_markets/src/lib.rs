@@ -5,7 +5,8 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("EA838rrQJPTmk4FNMRV4esgU7rFo5oRLGgW1Nws1jzox");
 
-pub const ZK_LOCATION_PROGRAM_ID: Pubkey = pubkey!("Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD");
+// Must match the deployed zk_location_verifier program ID
+pub const ZK_LOCATION_PROGRAM_ID: Pubkey = pubkey!("56qEvUYQnhfEf557ftLVdjtwqfJA6TpG2cnru3MyhT7Z");
 pub const MAX_QUESTION_LEN: usize = 128;
 pub const MAX_URL_LEN: usize = 256;
 pub const OUTCOME_NONE: u8 = 0;

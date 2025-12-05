@@ -610,7 +610,12 @@ export default function Page() {
     amount: number;
     slippageBps: number;
   }) => {
-    if (!selectedMarket || !wallet.publicKey) return;
+    if (!selectedMarket || !wallet.publicKey || !userStatePda) {
+      if (!userStatePda) {
+        alert("Please verify your location first before trading.");
+      }
+      return;
+    }
     
     // Check balance
     if (usdcBalance === null || amount > usdcBalance) {
@@ -621,28 +626,48 @@ export default function Page() {
     try {
       setIsSubmittingTrade(true);
 
-      // Calculate shares received (simplified AMM math for demo)
-      const price = side === "yes" ? selectedMarket.yesPrice : selectedMarket.noPrice;
-      const sharesReceived = amount / price;
-
-      // Simulate on-chain delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Convert amount to USDC base units (6 decimals)
+      const amountBaseUnits = Math.floor(amount * 1_000_000);
       
-      // For demo: create a mock transaction signature
-      const mockTxSig = `${Math.random().toString(36).substring(2, 15)}...${Math.random().toString(36).substring(2, 8)}`;
+      // Calculate minimum shares out with slippage
+      const price = side === "yes" ? selectedMarket.yesPrice : selectedMarket.noPrice;
+      const expectedShares = amount / price;
+      const minSharesOut = Math.floor(expectedShares * (1 - slippageBps / 10000) * 1_000_000);
+
+      const userLocationPubkey = new PublicKey(userStatePda);
+
+      console.log("Placing order on-chain:", {
+        market: selectedMarket.id,
+        side,
+        amountUsdc: amount,
+        amountBaseUnits,
+        minSharesOut,
+        userLocation: userLocationPubkey.toBase58(),
+      });
+
+      // Execute real on-chain transaction
+      const txSignature = await placeOrderOnChain({
+        connection,
+        wallet: wallet as AnchorWallet,
+        market: new PublicKey(selectedMarket.id),
+        userLocation: userLocationPubkey,
+        amount: amountBaseUnits,
+        side,
+        minSharesOut,
+      });
 
       console.log("Trade executed:", {
         market: selectedMarket.id,
         side,
         amount,
-        sharesReceived,
-        tx: mockTxSig,
+        tx: txSignature,
       });
 
       // Refresh actual USDC balance from chain
       await fetchUsdcBalance();
       
-      // Update user positions (mock for demo - in prod would fetch from chain)
+      // Update user positions locally (will be refreshed from chain in future)
+      const sharesReceived = amount / price;
       setUserPositions(prev => ({
         ...prev,
         [selectedMarket.id]: {
@@ -658,11 +683,26 @@ export default function Page() {
           : m
       ));
 
-      alert(`✅ Trade successful!\n\nBought ${sharesReceived.toFixed(2)} ${side.toUpperCase()} shares for $${amount.toFixed(2)} USDC\n\nTx: ${mockTxSig}`);
+      alert(`✅ Trade successful!\n\nBought ~${sharesReceived.toFixed(2)} ${side.toUpperCase()} shares for $${amount.toFixed(2)} USDC\n\nTx: ${txSignature.slice(0, 20)}...`);
       setSelectedMarket(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Trade failed", err);
-      alert("Trade failed. See console for details.");
+      
+      // Parse common errors
+      let errorMsg = "Trade failed. See console for details.";
+      if (err?.message?.includes("insufficient")) {
+        errorMsg = "Insufficient USDC balance.";
+      } else if (err?.message?.includes("LocationNotVerified")) {
+        errorMsg = "Location not verified. Please verify your location first.";
+      } else if (err?.message?.includes("WrongRegion")) {
+        errorMsg = "You are not in the correct region to trade this market.";
+      } else if (err?.message?.includes("MarketClosed")) {
+        errorMsg = "This market is closed for trading.";
+      } else if (err?.message) {
+        errorMsg = `Trade failed: ${err.message}`;
+      }
+      
+      alert(errorMsg);
     } finally {
       setIsSubmittingTrade(false);
     }
@@ -674,7 +714,11 @@ export default function Page() {
     regionId: string;
     regionName: string;
     closeTime: Date;
-    manifestUrl: string;
+    manifest: {
+      q: string;      // question
+      loc: string;    // location (short)
+      t: string;      // type ("LLM")
+    };
     bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number };
   }) => {
     if (!wallet.publicKey) return;
@@ -685,17 +729,10 @@ export default function Page() {
       // Generate region ID hash from region name
       const regionIdHash = regionIdFromName(data.regionId);
       
-      // Create manifest content and hash it (include bounds for verification)
-      const manifestContent = JSON.stringify({
-        question: data.question,
-        region: data.regionName,
-        regionId: data.regionId,
-        bounds: data.bounds,
-        closeTime: data.closeTime.toISOString(),
-        createdAt: new Date().toISOString(),
-        creator: wallet.publicKey.toBase58(),
-      });
-      const manifestHashArr = hashManifest(manifestContent);
+      // The manifest is auto-generated and stored on-chain as JSON string
+      // We serialize it and hash it for verification
+      const manifestJson = JSON.stringify(data.manifest);
+      const manifestHashArr = hashManifest(manifestJson);
 
       // Close time as unix timestamp (seconds)
       const closeTimeUnix = Math.floor(data.closeTime.getTime() / 1000);
@@ -706,7 +743,7 @@ export default function Page() {
         regionName: data.regionName,
         bounds: data.bounds,
         closeTime: closeTimeUnix,
-        manifestUrl: data.manifestUrl,
+        manifest: data.manifest,
       });
 
       const result = await createMarket({
@@ -715,7 +752,7 @@ export default function Page() {
         regionId: regionIdHash,
         question: data.question,
         closeTime: closeTimeUnix,
-        manifestUrl: data.manifestUrl,
+        manifestUrl: manifestJson, // Store the manifest JSON directly
         manifestHash: manifestHashArr,
       });
 
@@ -933,9 +970,6 @@ export default function Page() {
                       <p className="font-semibold mb-1">📍 Location Detected</p>
                       <p className="text-sm text-slate-300">
                         {detectedRegion.name || "Your Location"}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-1">
-                        {detectedRegion.userLat?.toFixed(4)}°, {detectedRegion.userLon?.toFixed(4)}°
                       </p>
                     </div>
                     <button

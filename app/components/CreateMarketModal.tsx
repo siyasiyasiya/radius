@@ -19,6 +19,13 @@ interface GeocodeSuggestion {
   lon: string;
 }
 
+// Compact manifest format to fit within Solana transaction limits
+interface ResolutionManifest {
+  q: string;      // question
+  loc: string;    // location (short)
+  t: string;      // type ("LLM")
+}
+
 interface CreateMarketModalProps {
   open: boolean;
   onClose: () => void;
@@ -27,7 +34,7 @@ interface CreateMarketModalProps {
     regionId: string;
     regionName: string;
     closeTime: Date;
-    manifestUrl: string;
+    manifest: ResolutionManifest;
     bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number };
   }) => Promise<void>;
   isSubmitting: boolean;
@@ -53,12 +60,26 @@ export default function CreateMarketModal({
   } | null>(null);
   const [suggestions, setSuggestions] = useState<GeocodeSuggestion[]>([]);
   const [fetchingSuggestions, setFetchingSuggestions] = useState(false);
-  const [closeDays, setCloseDays] = useState<number>(7);
-  const [manifestUrl, setManifestUrl] = useState("");
+  const [durationMinutes, setDurationMinutes] = useState<number>(60); // Default 1 hour
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showSuggestions, setShowSuggestions] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Duration options
+  const DURATION_OPTIONS = [
+    { label: "1 min", value: 1 },
+    { label: "5 min", value: 5 },
+    { label: "15 min", value: 15 },
+    { label: "30 min", value: 30 },
+    { label: "45 min", value: 45 },
+    { label: "1 hour", value: 60 },
+    { label: "2 hours", value: 120 },
+    { label: "6 hours", value: 360 },
+    { label: "12 hours", value: 720 },
+    { label: "1 day", value: 1440 },
+    { label: "7 days", value: 10080 },
+  ];
 
   // Reset form when modal opens
   useEffect(() => {
@@ -67,8 +88,7 @@ export default function CreateMarketModal({
       setLocationQuery("");
       setSelectedLocation(null);
       setSuggestions([]);
-      setCloseDays(7);
-      setManifestUrl("");
+      setDurationMinutes(60);
       setErrors({});
       setShowSuggestions(false);
     }
@@ -196,10 +216,10 @@ export default function CreateMarketModal({
       newErrors.region = "You must be within this location to create a market here";
     }
 
-    if (closeDays < 1) {
-      newErrors.closeTime = "Market must be open for at least 1 day";
-    } else if (closeDays > 365) {
-      newErrors.closeTime = "Market cannot be open for more than 365 days";
+    if (durationMinutes < 1) {
+      newErrors.closeTime = "Market must be open for at least 1 minute";
+    } else if (durationMinutes > 525600) { // 1 year in minutes
+      newErrors.closeTime = "Market cannot be open for more than 1 year";
     }
 
     setErrors(newErrors);
@@ -211,7 +231,7 @@ export default function CreateMarketModal({
     if (!validate() || !selectedLocation) return;
 
     const closeTime = new Date();
-    closeTime.setDate(closeTime.getDate() + closeDays);
+    closeTime.setTime(closeTime.getTime() + durationMinutes * 60 * 1000);
 
     // Create a region ID from the location name (simplified)
     const regionId = selectedLocation.name
@@ -219,12 +239,22 @@ export default function CreateMarketModal({
       .replace(/[^a-z0-9]+/g, "-")
       .substring(0, 32);
 
+    // Shorten location name if needed (keep first part before comma)
+    const shortLocation = selectedLocation.name.split(",")[0].trim();
+
+    // Auto-generate a COMPACT resolution manifest (must fit in 256 bytes on-chain)
+    const manifest = {
+      q: question.trim(),
+      loc: shortLocation,
+      t: "LLM",
+    };
+
     await onSubmit({
       question: question.trim(),
       regionId,
       regionName: selectedLocation.name,
       closeTime,
-      manifestUrl: manifestUrl.trim() || `https://radius.markets/manifest/${regionId}/${Date.now()}`,
+      manifest,
       bounds: selectedLocation.bounds,
     });
   };
@@ -379,58 +409,52 @@ export default function CreateMarketModal({
             </p>
           </div>
 
-          {/* Close Time */}
+          {/* Duration Selection */}
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
               Market Duration
             </label>
-            <div className="flex items-center gap-3">
-              <input
-                type="number"
-                value={closeDays}
-                onChange={(e) => setCloseDays(parseInt(e.target.value) || 1)}
-                min={1}
-                max={365}
-                className={`w-24 bg-slate-800 border rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                  errors.closeTime ? "border-red-500" : "border-slate-700"
-                }`}
-              />
-              <span className="text-slate-400">days from now</span>
+            <div className="grid grid-cols-4 gap-2">
+              {DURATION_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setDurationMinutes(opt.value)}
+                  className={`py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                    durationMinutes === opt.value
+                      ? "bg-sky-500 text-white"
+                      : "bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
             {errors.closeTime && (
               <span className="text-xs text-red-400 mt-1 block">
                 {errors.closeTime}
               </span>
             )}
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-slate-500 mt-2">
               Closes:{" "}
               {new Date(
-                Date.now() + closeDays * 24 * 60 * 60 * 1000
-              ).toLocaleDateString()}
+                Date.now() + durationMinutes * 60 * 1000
+              ).toLocaleString()}
             </p>
           </div>
 
-          {/* Manifest URL (Advanced - collapsed by default) */}
-          <details className="group">
-            <summary className="text-sm text-slate-400 cursor-pointer hover:text-slate-300">
-              Advanced options
-            </summary>
-            <div className="mt-3">
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Resolution Manifest URL (optional)
-              </label>
-              <input
-                type="url"
-                value={manifestUrl}
-                onChange={(e) => setManifestUrl(e.target.value)}
-                placeholder="https://example.com/manifest.json"
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-              <p className="text-xs text-slate-500 mt-1">
-                URL pointing to resolution criteria for AI resolver
-              </p>
+          {/* Auto-generated manifest info */}
+          <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>AI Oracle will auto-resolve this market</span>
             </div>
-          </details>
+            <p className="text-xs text-slate-500 mt-1">
+              The oracle searches the web for "{question || "your question"}" and uses AI to determine the outcome.
+            </p>
+          </div>
 
           {/* Submit */}
           <div className="flex gap-3 pt-2">

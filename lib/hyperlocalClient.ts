@@ -10,9 +10,9 @@ export const HYPERLOCAL_PROGRAM_ID = new PublicKey(
   "EA838rrQJPTmk4FNMRV4esgU7rFo5oRLGgW1Nws1jzox"
 );
 
-// Devnet USDC mint (replace with your chosen mint if needed)
+// Devnet USDC mint
 export const USDC_MINT = new PublicKey(
-  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr"
 );
 
 // Compatible wallet type for browser wallet adapters

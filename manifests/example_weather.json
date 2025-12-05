@@ -1,0 +1,13 @@
+{
+  "title": "Will it snow in Ann Arbor on December 6, 2025?",
+  "description": "Resolves YES if there is any measurable snowfall (0.1 inch or more) recorded in Ann Arbor, MI on December 6, 2025. Resolves NO otherwise.",
+  "deadline": "2025-12-07T00:00:00Z",
+  
+  "resolution_type": "LLM_WEB_GENERIC",
+  
+  "config": {
+    "search_query": "Ann Arbor Michigan weather December 6 2025 snow",
+    "validation_rules": "Resolve YES if credible weather sources report snowfall of 0.1 inches or more in Ann Arbor on Dec 6, 2025. Resolve NO if weather reports show no snow or only trace amounts. If no reliable data is found, resolve UNSURE.",
+    "required_domains": "weather.gov,weather.com,accuweather.com,wunderground.com"
+  }
+}

@@ -16,6 +16,8 @@ import {
   ResolutionManifest,
   OracleResult,
   isValidManifest,
+  isCompactManifest,
+  expandCompactManifest,
 } from "../app/types/manifest"; // Ensure this path is correct
 
 // Load IDL
@@ -60,12 +62,30 @@ async function fetchManifest(market: MarketAccount): Promise<ResolutionManifest 
   if (!url) return null;
 
   try {
+    // First, try to parse as inline JSON (auto-generated manifests)
+    if (url.startsWith("{")) {
+      const parsed = JSON.parse(url);
+      
+      // Check for compact manifest format first
+      if (isCompactManifest(parsed)) {
+        console.log("  ✓ Parsed compact inline manifest, expanding...");
+        return expandCompactManifest(parsed);
+      }
+      
+      if (isValidManifest(parsed)) {
+        console.log("  ✓ Parsed inline manifest JSON");
+        return parsed;
+      }
+    }
+
+    // Then try as HTTP URL
     if (url.startsWith("http")) {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`HTTP error ${response.status}`);
       const data = await response.json();
       if (isValidManifest(data)) return data;
     } else {
+      // Try as file path
       let filePath = url;
       // Resolve relative paths if needed
       if (!fs.existsSync(filePath)) {
@@ -253,18 +273,11 @@ export async function resolveMarketLogic(manifest: ResolutionManifest): Promise<
   }
 }
 
+// Polling interval in milliseconds (default: 30 seconds)
+const POLL_INTERVAL_MS = parseInt(process.env.AGENT_POLL_INTERVAL || "30000");
+
 // 4. MAIN LOOP
-async function main() {
-  const resolverKp = loadKeypair(RESOLVER_KEYPAIR_PATH);
-  const connection = new Connection(RPC_URL, "confirmed");
-  const wallet = new anchor.Wallet(resolverKp);
-  const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
-  
-  // Use explicit Program ID to avoid IDL mismatch
-  const program = new anchor.Program(hyperlocalIdl, provider);
-
-  console.log("🤖 Agent running with Gemini AI...");
-
+async function runOnce(program: anchor.Program, resolverKp: Keypair): Promise<number> {
   // Fetch all markets
   const markets = await (program.account["market"] as any).all() as { publicKey: PublicKey; account: MarketAccount }[];
   
@@ -279,25 +292,30 @@ async function main() {
     return status !== STATUS_RESOLVED && closeTime < nowTs;
   });
 
-  console.log(`Found ${candidates.length} markets pending resolution.`);
-
   if (candidates.length === 0) {
-    console.log("💡 Tip: Use 'create_test_market.ts' to create a market that expires in the past.");
+    return 0;
   }
 
+  console.log(`\n📊 Found ${candidates.length} markets pending resolution.`);
+  let resolved = 0;
+
   for (const { publicKey, account } of candidates) {
-    console.log(`\nProcessing: ${publicKey.toBase58()} | "${account.question}"`);
+    console.log(`\n🔍 Processing: ${publicKey.toBase58().slice(0, 8)}... | "${account.question}"`);
     
     const manifest = await fetchManifest(account);
     if (!manifest) {
-      console.warn(`⚠️ Skipping - Manifest unreadable.`);
+      console.warn(`  ⚠️ Skipping - Manifest unreadable.`);
       continue;
     }
 
     const result = await resolveMarketLogic(manifest);
-    console.log(`🤖 Verdict: ${result.outcome} (${result.reason})`);
+    console.log(`  🤖 Verdict: ${result.outcome} (confidence: ${(result.confidence * 100).toFixed(0)}%)`);
+    console.log(`  📝 Reason: ${result.reason}`);
 
-    if (result.outcome === "UNSURE") continue;
+    if (result.outcome === "UNSURE") {
+      console.log(`  ⏭️ Skipping - outcome uncertain`);
+      continue;
+    }
 
     const outcomeU8 = result.outcome === "YES" ? OUTCOME_YES : OUTCOME_NO;
     const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
@@ -311,12 +329,66 @@ async function main() {
         .signers([resolverKp])
         .rpc();
 
-      console.log(`✅ Success! Tx: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+      console.log(`  ✅ Resolved! Tx: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+      resolved++;
     } catch (e) {
-      console.error(`❌ Transaction failed:`, e);
+      console.error(`  ❌ Transaction failed:`, e);
     }
   }
-  console.log("\n✨ Done.");
+
+  return resolved;
+}
+
+async function main() {
+  const resolverKp = loadKeypair(RESOLVER_KEYPAIR_PATH);
+  const connection = new Connection(RPC_URL, "confirmed");
+  const wallet = new anchor.Wallet(resolverKp);
+  const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
+  
+  const program = new anchor.Program(hyperlocalIdl, provider);
+
+  // Check if running in continuous mode
+  const continuous = process.argv.includes("--watch") || process.argv.includes("-w");
+
+  if (continuous) {
+    console.log("🤖 Oracle Agent running in WATCH mode");
+    console.log(`   Polling every ${POLL_INTERVAL_MS / 1000}s for markets to resolve...`);
+    console.log(`   Press Ctrl+C to stop\n`);
+
+    // Run continuously
+    while (true) {
+      const timestamp = new Date().toLocaleTimeString();
+      process.stdout.write(`[${timestamp}] Checking for resolvable markets... `);
+      
+      try {
+        const resolved = await runOnce(program, resolverKp);
+        if (resolved > 0) {
+          console.log(`✅ Resolved ${resolved} market(s)`);
+        } else {
+          console.log(`No markets ready`);
+        }
+      } catch (e) {
+        console.log(`⚠️ Error: ${(e as Error).message}`);
+      }
+
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+  } else {
+    // Single run mode
+    console.log("🤖 Oracle Agent - Single Run Mode");
+    console.log("   (Use --watch or -w for continuous mode)\n");
+    
+    const resolved = await runOnce(program, resolverKp);
+    
+    if (resolved === 0) {
+      console.log("\n💡 No markets resolved. Tips:");
+      console.log("   - Create a market with a close time in the past");
+      console.log("   - Or run with --watch to wait for markets to expire");
+    }
+    
+    console.log("\n✨ Done.");
+  }
 }
 
 main().catch((e) => {
