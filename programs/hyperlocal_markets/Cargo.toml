@@ -9,7 +9,7 @@ name = "hyperlocal_markets"
 
 [dependencies]
 anchor-lang = { workspace = true, features = ["init-if-needed"] }
-anchor-spl = { version = "0.32.1", features = ["idl-build"] }
+anchor-spl = { version = "0.31.1", features = ["idl-build"] }
 
 [features]
 no-entrypoint = []

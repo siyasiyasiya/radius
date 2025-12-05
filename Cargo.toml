@@ -6,10 +6,13 @@ members = [
 ]
 
 [workspace.dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 groth16-solana = "0.2.0"
+anchor-spl = "0.31.1"
+proc-macro2 = "1.0.94"
+
+[patch.crates-io]
+anchor-syn = { path = "vendor/anchor-syn" }
 
 [profile.release]
 overflow-checks = true
-
-[patch.crates-io]
-anchor-lang = { git = "https://github.com/solana-foundation/anchor", rev = "54d5396" }

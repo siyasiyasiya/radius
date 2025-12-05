@@ -1,0 +1,5 @@
+[target.'cfg(not(target_arch = "bpf"))']
+rustflags = ["--cfg=proc_macro_span"]
+
+[target.bpfel-unknown-unknown]
+rustflags = ["--cfg=proc_macro_span"]

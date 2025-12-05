@@ -10,8 +10,12 @@ name = "zk_location_verifier"
 [dependencies]
 anchor-lang = { workspace = true, features = ["init-if-needed"] }
 groth16-solana = { workspace = true }
+proc-macro2 = "1.0.94"
 
 [features]
 no-entrypoint = []
 idl-build = ["anchor-lang/idl-build"]
 default = []
+
+[patch.crates-io]
+anchor-syn = { path = "vendor/anchor-syn" }
