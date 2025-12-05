@@ -1,6 +1,6 @@
 import "dotenv/config";
-import { resolveMarketLogic } from "./run_agent.ts";
-import { ResolutionManifest } from "../app/types/manifest.ts";
+import { resolveMarketLogic } from "./run_agent";
+import { ResolutionManifest } from "../app/types/manifest";
 
 async function main() {
   const manifest: ResolutionManifest = {

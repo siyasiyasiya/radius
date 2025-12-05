@@ -113,7 +113,7 @@ export async function submitLocationProof(
   const ix = new TransactionInstruction({
     programId: ZK_LOCATION_PROGRAM_ID,
     keys,
-    data,
+    data: Buffer.from(data),
   });
 
   const tx = new Transaction().add(ix);

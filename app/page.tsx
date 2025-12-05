@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
 import Script from "next/script";
+import { Connection, PublicKey } from "@solana/web3.js";
 
 import SideBlock from "./components/SideBlock";
 import SpreadBlock from "./components/SpreadBlock";
@@ -11,17 +12,22 @@ import VolumeBlock from "./components/VolumeBlock";
 import TVLSparkline from "./components/TVLSparkline";
 import { proveLocation } from "../lib/zkProver";
 import TradeModal from "./components/TradeModal";
+import {
+  AnchorWallet,
+  fetchMarkets,
+  placeOrderOnChain,
+} from "../lib/hyperlocalClient";
+import { submitLocationProof } from "../lib/zkLocationClient";
 
 type TVLPoint = { value: number };
 
 type Market = {
-  id: number;
+  id: string;
   title: string;
-  yes: number;
-  no: number;
-  tvl: TVLPoint[];
-  region: string;
-  onChainAddress?: string;
+  status: any;
+  resolved: boolean;
+  outcome: number;
+  closeTime: number;
 };
 
 const REGIONS = {
@@ -47,7 +53,13 @@ export default function Page() {
   const [detectedRegion, setDetectedRegion] = useState<any>(null);
   const [isDetecting, setIsDetecting] = useState(false);
   const [isProvingLocation, setIsProvingLocation] = useState(false);
+  const [userStatePda, setUserStatePda] = useState<string | null>(null);
+  const [markets, setMarkets] = useState<Market[]>([]);
   const wallet = useWallet();
+  const connection = useMemo(
+    () => new Connection(process.env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com", "confirmed"),
+    []
+  );
 
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [defaultSide, setDefaultSide] = useState<"yes" | "no">("yes");
@@ -61,7 +73,29 @@ export default function Page() {
     if (wallet.connected && !detectedRegion) {
       detectLocation();
     }
+    if (wallet.connected) {
+      loadMarkets();
+    }
   }, [wallet.connected]);
+
+  const loadMarkets = async () => {
+    if (!wallet.publicKey) return;
+    try {
+      const mks = await fetchMarkets(connection, wallet as AnchorWallet);
+      setMarkets(
+        mks.map((m) => ({
+          id: m.publicKey.toBase58(),
+          title: m.question,
+          status: m.status,
+          resolved: m.resolved,
+          outcome: m.outcome,
+          closeTime: m.closeTime,
+        }))
+      );
+    } catch (e) {
+      console.error("Failed to fetch markets", e);
+    }
+  };
 
   const detectLocation = async () => {
     setIsDetecting(true);
@@ -135,6 +169,14 @@ export default function Page() {
         publicInputs: proof.publicInputsPacked,
         validUntil: Date.now() + 24 * 60 * 60 * 1000,
       });
+
+      if (!wallet.publicKey) throw new Error("Wallet not connected");
+      const submitRes = await submitLocationProof(
+        wallet,
+        proof.proofPacked,
+        proof.publicInputsPacked
+      );
+      setUserStatePda(submitRes.userStatePda.toBase58());
     } catch (error) {
       console.error("ZK proof generation failed:", error);
       alert("Proof generation failed. Check console for details.");
@@ -151,22 +193,25 @@ export default function Page() {
     amount: number;
     slippageBps: number;
   }) => {
-    if (!selectedMarket) return;
+    if (!selectedMarket || !wallet.publicKey || !userStatePda) return;
 
     try {
       setIsSubmittingTrade(true);
 
-      console.log("Trade params:", {
-        marketId: selectedMarket.id,
-        title: selectedMarket.title,
+      const lamports = Math.round(amount * 1_000_000); // USDC 6 decimals
+
+      const sig = await placeOrderOnChain({
+        connection,
+        wallet: wallet as AnchorWallet,
+        market: new PublicKey(selectedMarket.id),
+        userLocation: new PublicKey(userStatePda),
+        amount: lamports,
         side,
-        amount,
-        slippageBps,
-        region: selectedMarket.region,
-        onChainAddress: selectedMarket.onChainAddress,
+        minSharesOut: 0,
       });
 
-      // Future: call Anchor program.methods.placeOrder here.
+      console.log("Trade sent, tx:", sig);
+      alert(`Trade submitted: ${sig}`);
 
       setSelectedMarket(null);
     } catch (err) {
@@ -177,36 +222,7 @@ export default function Page() {
     }
   };
 
-  const markets: Market[] = [
-    {
-      id: 1,
-      title: "Will Powell HS win the state championship?",
-      yes: 0.42,
-      no: 0.58,
-      tvl: [{ value: 3000 }, { value: 4800 }, { value: 6400 }],
-      region: "powell",
-    },
-    {
-      id: 2,
-      title: "Will AQI in West Lafayette exceed 120 tomorrow?",
-      yes: 0.35,
-      no: 0.65,
-      tvl: [{ value: 1800 }, { value: 2600 }, { value: 3200 }],
-      region: "west-lafayette",
-    },
-    {
-      id: 3,
-      title: "Will gas in Powell hit $4.00/gal by Sept 30?",
-      yes: 0.28,
-      no: 0.72,
-      tvl: [{ value: 2200 }, { value: 2800 }, { value: 3600 }],
-      region: "powell",
-    },
-  ];
-
-  const filteredMarkets = locationProof
-    ? markets.filter((m) => m.region === locationProof.region)
-    : [];
+  const filteredMarkets = markets;
 
   return (
     <>
@@ -353,35 +369,30 @@ export default function Page() {
 
                     <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-stretch">
                       <div className="flex flex-col gap-4">
-                        <div className="flex gap-6">
-                          <div>
-                            <div className="text-[11px] uppercase text-slate-500">
-                              Yes
-                            </div>
-                            <div className="text-lg font-semibold text-emerald-400">
-                              {(m.yes * 100).toFixed(0)}%
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-[11px] uppercase text-slate-500">
-                              No
-                            </div>
-                            <div className="text-lg font-semibold text-rose-400">
-                              {(m.no * 100).toFixed(0)}%
-                            </div>
-                          </div>
+                        <div className="text-sm text-slate-400">
+                          Status:{" "}
+                          {("open" in (m.status as any) && "Open") ||
+                            ("disputed" in (m.status as any) && "Disputed") ||
+                            ("resolved" in (m.status as any) && "Resolved")}
                         </div>
-
-                        <div className="h-12">
-                          <TVLSparkline data={m.tvl} />
+                        <div className="text-sm text-slate-400">
+                          Outcome:{" "}
+                          {m.resolved
+                            ? m.outcome === 1
+                              ? "YES"
+                              : m.outcome === 2
+                              ? "NO"
+                              : "None"
+                            : "TBD"}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Market: {m.id}
                         </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
-                        <SpreadBlock yes={m.yes} no={m.no} />
-                        <VolumeBlock
-                          tvl={m.tvl[m.tvl.length - 1].value}
-                        />
+                        <SpreadBlock yes={0.5} no={0.5} />
+                        <VolumeBlock tvl={0} />
                       </div>
                     </div>
                   </section>
