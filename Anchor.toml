@@ -9,12 +9,20 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [toolchain]
-anchor-lang = "0.31.1"
-proc-macro2 = "1.0.94"
+anchor_version = "0.31.1"
 
 [programs.localnet]
 zk_location_verifier = "Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD"
 hyperlocal_markets = "8pkLV5wpiXFTu9VGwhDMdUESp1RkQUPfa8CyqT2bKket"
 
+[programs.devnet]
+zk_location_verifier = "8dmw53w4DQSZGYARbz7LD4dp7oG9AZKFtNU6ujeKpEGU"
+hyperlocal_markets = "3xPomABvsTSG6jpco6R3svg493h5KJNBM9UzVT1Sx7pP"
+
 [scripts]
-test = "anchor test"
+
+[test.validator]
+rpc_port = 8899
+ledger = ".anchor/test-ledger"
+bind_address = "127.0.0.1"
+startup_wait = 10000

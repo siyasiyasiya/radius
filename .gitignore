@@ -32,6 +32,9 @@ app/web/lib/snarkjs.min.js
 target/
 Cargo.lock # For Anchor multi-program workspace (optional)
 
+# Anchor local artifacts
+.anchor/
+
 # Environment
 .env
 .env.local
