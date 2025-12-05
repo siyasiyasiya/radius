@@ -24,28 +24,67 @@ type TVLPoint = { value: number };
 type Market = {
   id: string;
   title: string;
+  regionId: string;
+  regionName: string;
   status: any;
   resolved: boolean;
   outcome: number;
   closeTime: number;
+  yesPrice: number;
+  noPrice: number;
+  volume: number;
 };
 
 const REGIONS = {
-  "west-lafayette": {
-    name: "West Lafayette, IN",
-    minLat: 40.4,
-    maxLat: 40.5,
-    minLon: -86.95,
-    maxLon: -86.85,
+  // Michigan State - large bounding box
+  "michigan": {
+    name: "Michigan",
+    minLat: 41.696,
+    maxLat: 48.306,
+    minLon: -90.418,
+    maxLon: -82.122,
   },
-  powell: {
-    name: "Powell, OH",
-    minLat: 40.13,
-    maxLat: 40.23,
-    minLon: -83.1,
-    maxLon: -83.0,
+  // Ann Arbor area
+  "ann-arbor": {
+    name: "Ann Arbor, MI",
+    minLat: 42.22,
+    maxLat: 42.32,
+    minLon: -83.82,
+    maxLon: -83.68,
   },
-  // Dynamic region that will be created based on user's actual location
+  // UMich Campus - expanded bounds to cover central, north, and south campus
+  "umich": {
+    name: "University of Michigan",
+    minLat: 42.265,   // South of Michigan Stadium
+    maxLat: 42.296,   // North of North Campus
+    minLon: -83.755,  // West of the Big House
+    maxLon: -83.710,  // East of Medical Campus
+  },
+  // Detroit
+  "detroit": {
+    name: "Detroit, MI",
+    minLat: 42.25,
+    maxLat: 42.45,
+    minLon: -83.30,
+    maxLon: -82.90,
+  },
+  // Chicago (for testing out-of-state)
+  "chicago": {
+    name: "Chicago, IL",
+    minLat: 41.65,
+    maxLat: 42.02,
+    minLon: -87.94,
+    maxLon: -87.52,
+  },
+  // New York (for testing far away)
+  "nyc": {
+    name: "New York City",
+    minLat: 40.49,
+    maxLat: 40.92,
+    minLon: -74.26,
+    maxLon: -73.70,
+  },
+  // Dynamic region for current location
   "current-location": {
     name: "Current Location",
     minLat: 0,
@@ -53,6 +92,209 @@ const REGIONS = {
     minLon: 0,
     maxLon: 0,
   },
+};
+
+// Mock markets with region assignments
+// Each market is assigned to a specific region - users can only see/trade markets for regions they're in
+const MOCK_MARKETS: Array<{
+  id: string;
+  title: string;
+  regionId: string;
+  regionName: string;
+  status: { open: {} } | { resolved: {} };
+  resolved: boolean;
+  outcome: number;
+  closeTime: number;
+  yesPrice: number;
+  noPrice: number;
+  volume: number;
+}> = [
+  // Michigan state-wide markets
+  {
+    id: "mkt-mi-weather",
+    title: "Will Michigan see more than 80 inches of snow this winter?",
+    regionId: "michigan",
+    regionName: "Michigan",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 90 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.62,
+    noPrice: 0.38,
+    volume: 15420,
+  },
+  {
+    id: "mkt-mi-football",
+    title: "Will Michigan win the Big Ten Championship this year?",
+    regionId: "michigan",
+    regionName: "Michigan",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.71,
+    noPrice: 0.29,
+    volume: 89200,
+  },
+  // Ann Arbor markets
+  {
+    id: "mkt-aa-zingermans",
+    title: "Will Zingerman's open a new location in Ann Arbor by 2025?",
+    regionId: "ann-arbor",
+    regionName: "Ann Arbor",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 180 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.35,
+    noPrice: 0.65,
+    volume: 4230,
+  },
+  {
+    id: "mkt-aa-aata",
+    title: "Will AATA expand TheRide bus routes to Ypsilanti this year?",
+    regionId: "ann-arbor",
+    regionName: "Ann Arbor",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 60 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.48,
+    noPrice: 0.52,
+    volume: 2100,
+  },
+  {
+    id: "mkt-aa-rent",
+    title: "Will average rent in Ann Arbor exceed $2000/month by June?",
+    regionId: "ann-arbor",
+    regionName: "Ann Arbor",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 200 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.78,
+    noPrice: 0.22,
+    volume: 8900,
+  },
+  // UMich campus markets
+  {
+    id: "mkt-um-dining",
+    title: "Will South Quad dining hall get renovated before Fall semester?",
+    regionId: "umich",
+    regionName: "UMich Campus",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 240 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.22,
+    noPrice: 0.78,
+    volume: 1850,
+  },
+  {
+    id: "mkt-um-gameday",
+    title: "Will attendance at the next home game exceed 110,000?",
+    regionId: "umich",
+    regionName: "UMich Campus",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 14 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.85,
+    noPrice: 0.15,
+    volume: 12400,
+  },
+  {
+    id: "mkt-um-library",
+    title: "Will the Hatcher Graduate Library be open 24/7 during finals?",
+    regionId: "umich",
+    regionName: "UMich Campus",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 10 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.91,
+    noPrice: 0.09,
+    volume: 3200,
+  },
+  // Detroit markets (should NOT show for UMich user)
+  {
+    id: "mkt-det-lions",
+    title: "Will the Lions make the playoffs this season?",
+    regionId: "detroit",
+    regionName: "Detroit",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 45 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.67,
+    noPrice: 0.33,
+    volume: 145000,
+  },
+  {
+    id: "mkt-det-auto",
+    title: "Will GM announce new EV factory in Detroit metro by Q2?",
+    regionId: "detroit",
+    regionName: "Detroit",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 120 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.41,
+    noPrice: 0.59,
+    volume: 23500,
+  },
+  // Chicago markets (should NOT show)
+  {
+    id: "mkt-chi-bears",
+    title: "Will the Bears finish above .500 this season?",
+    regionId: "chicago",
+    regionName: "Chicago",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 60 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.28,
+    noPrice: 0.72,
+    volume: 67000,
+  },
+  // NYC markets (should NOT show)
+  {
+    id: "mkt-nyc-subway",
+    title: "Will MTA implement congestion pricing by March?",
+    regionId: "nyc",
+    regionName: "NYC",
+    status: { open: {} },
+    resolved: false,
+    outcome: 0,
+    closeTime: Date.now() + 90 * 24 * 60 * 60 * 1000,
+    yesPrice: 0.55,
+    noPrice: 0.45,
+    volume: 234000,
+  },
+];
+
+// Helper function to check if a point is within a region's bounds
+function isPointInRegion(lat: number, lon: number, region: typeof REGIONS[keyof typeof REGIONS]): boolean {
+  return lat >= region.minLat && lat <= region.maxLat && lon >= region.minLon && lon <= region.maxLon;
+}
+
+// Get all regions that contain the user's location (hierarchical)
+function getMatchingRegions(lat: number, lon: number): string[] {
+  const matches: string[] = [];
+  for (const [regionId, bounds] of Object.entries(REGIONS)) {
+    if (regionId === "current-location") continue;
+    if (isPointInRegion(lat, lon, bounds)) {
+      matches.push(regionId);
+    }
+  }
+  return matches;
+}
+
+// LocalStorage keys for persistence
+const STORAGE_KEYS = {
+  LOCATION_PROOF: 'radius_location_proof',
+  DETECTED_REGION: 'radius_detected_region',
+  USER_STATE_PDA: 'radius_user_state_pda',
 };
 
 export default function Page() {
@@ -73,36 +315,94 @@ export default function Page() {
   const [defaultSide, setDefaultSide] = useState<"yes" | "no">("yes");
   const [isSubmittingTrade, setIsSubmittingTrade] = useState(false);
 
+  // Load persisted state from localStorage on mount
   useEffect(() => {
     setMounted(true);
+    
+    // Restore persisted location proof and region
+    try {
+      const savedProof = localStorage.getItem(STORAGE_KEYS.LOCATION_PROOF);
+      const savedRegion = localStorage.getItem(STORAGE_KEYS.DETECTED_REGION);
+      const savedPda = localStorage.getItem(STORAGE_KEYS.USER_STATE_PDA);
+      
+      if (savedProof) {
+        const proof = JSON.parse(savedProof);
+        // Check if proof is still valid (not expired)
+        if (proof.validUntil && proof.validUntil > Date.now()) {
+          setLocationProof(proof);
+          console.log("Restored location proof from storage");
+        } else {
+          // Clear expired proof
+          localStorage.removeItem(STORAGE_KEYS.LOCATION_PROOF);
+          console.log("Cleared expired location proof");
+        }
+      }
+      
+      if (savedRegion) {
+        setDetectedRegion(JSON.parse(savedRegion));
+        console.log("Restored detected region from storage");
+      }
+      
+      if (savedPda) {
+        setUserStatePda(savedPda);
+        console.log("Restored user state PDA from storage");
+      }
+    } catch (e) {
+      console.error("Failed to restore persisted state:", e);
+    }
   }, []);
+
+  // Persist locationProof when it changes
+  useEffect(() => {
+    if (mounted && locationProof) {
+      localStorage.setItem(STORAGE_KEYS.LOCATION_PROOF, JSON.stringify(locationProof));
+    }
+  }, [locationProof, mounted]);
+
+  // Persist detectedRegion when it changes
+  useEffect(() => {
+    if (mounted && detectedRegion) {
+      localStorage.setItem(STORAGE_KEYS.DETECTED_REGION, JSON.stringify(detectedRegion));
+    }
+  }, [detectedRegion, mounted]);
+
+  // Persist userStatePda when it changes
+  useEffect(() => {
+    if (mounted && userStatePda) {
+      localStorage.setItem(STORAGE_KEYS.USER_STATE_PDA, userStatePda);
+    }
+  }, [userStatePda, mounted]);
 
   useEffect(() => {
     if (wallet.connected && !detectedRegion) {
       detectLocation();
     }
-    if (wallet.connected) {
-      loadMarkets();
-    }
   }, [wallet.connected]);
 
-  const loadMarkets = async () => {
-    if (!wallet.publicKey) return;
-    try {
-      const mks = await fetchMarkets(connection, wallet as AnchorWallet);
-      setMarkets(
-        mks.map((m) => ({
-          id: m.publicKey.toBase58(),
-          title: m.question,
-          status: m.status,
-          resolved: m.resolved,
-          outcome: m.outcome,
-          closeTime: m.closeTime,
-        }))
-      );
-    } catch (e) {
-      console.error("Failed to fetch markets", e);
+  // Load all markets, track which regions user can trade in
+  const [tradableRegions, setTradableRegions] = useState<string[]>([]);
+  
+  useEffect(() => {
+    // Always show all markets
+    setMarkets(MOCK_MARKETS);
+    
+    // Update tradable regions when location is detected
+    if (detectedRegion) {
+      const matchingRegionIds = getMatchingRegions(detectedRegion.userLat, detectedRegion.userLon);
+      console.log("User location:", { lat: detectedRegion.userLat, lon: detectedRegion.userLon });
+      console.log("Tradable regions:", matchingRegionIds);
+      setTradableRegions(matchingRegionIds);
     }
+  }, [detectedRegion]);
+
+  // Helper to check if user can trade a market
+  const canTradeMarket = (market: Market): boolean => {
+    return tradableRegions.includes(market.regionId);
+  };
+
+  const loadMarkets = async () => {
+    // All markets are always loaded
+    setMarkets(MOCK_MARKETS);
   };
 
   const detectLocation = async () => {
@@ -281,6 +581,21 @@ export default function Page() {
                 Valid until{" "}
                 {new Date(locationProof.validUntil).toLocaleString()}
               </p>
+              <button
+                onClick={() => {
+                  // Clear all persisted state
+                  localStorage.removeItem(STORAGE_KEYS.LOCATION_PROOF);
+                  localStorage.removeItem(STORAGE_KEYS.DETECTED_REGION);
+                  localStorage.removeItem(STORAGE_KEYS.USER_STATE_PDA);
+                  setLocationProof(null);
+                  setDetectedRegion(null);
+                  setUserStatePda(null);
+                  setTradableRegions([]);
+                }}
+                className="mt-2 text-[10px] text-slate-500 hover:text-red-400 underline"
+              >
+                Clear verification
+              </button>
             </div>
           )}
 
@@ -358,7 +673,7 @@ export default function Page() {
                     {detectedRegion?.name || locationProof.region}
                   </h2>
                   <p className="text-sm text-slate-400">
-                    {filteredMarkets.length} local markets available
+                    {filteredMarkets.length} markets • {filteredMarkets.filter(m => canTradeMarket(m)).length} tradable
                   </p>
                 </div>
 
@@ -366,30 +681,49 @@ export default function Page() {
               </div>
 
               <div className="space-y-5">
-                {filteredMarkets.map((m) => (
+                {filteredMarkets.map((m) => {
+                  const isTradable = canTradeMarket(m);
+                  return (
                   <section
                     key={m.id}
-                    className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 md:p-6 flex flex-col gap-4"
+                    className={`rounded-2xl p-5 md:p-6 flex flex-col gap-4 border transition-all ${
+                      isTradable 
+                        ? "bg-slate-900/80 border-slate-800" 
+                        : "bg-slate-900/40 border-slate-800/50 opacity-60"
+                    }`}
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-xs text-slate-500 mb-1">
-                          #{m.id.toString().padStart(2, "0")} • Local only
+                          #{m.id.toString().padStart(2, "0")} • {m.regionName}
+                          {!isTradable && (
+                            <span className="ml-2 text-amber-500/80">🔒 Outside your region</span>
+                          )}
                         </p>
-                        <h3 className="text-base md:text-lg font-medium">
+                        <h3 className={`text-base md:text-lg font-medium ${!isTradable && "text-slate-400"}`}>
                           {m.title}
                         </h3>
                       </div>
 
-                      <button
-                        className="shrink-0 px-4 py-2 rounded-full bg-sky-500 hover:bg-sky-400 text-sm font-semibold"
-                        onClick={() => {
-                          setSelectedMarket(m);
-                          setDefaultSide("yes");
-                        }}
-                      >
-                        Trade
-                      </button>
+                      {isTradable ? (
+                        <button
+                          className="shrink-0 px-4 py-2 rounded-full bg-sky-500 hover:bg-sky-400 text-sm font-semibold"
+                          onClick={() => {
+                            setSelectedMarket(m);
+                            setDefaultSide("yes");
+                          }}
+                        >
+                          Trade
+                        </button>
+                      ) : (
+                        <button
+                          disabled
+                          className="shrink-0 px-4 py-2 rounded-full bg-slate-700 text-slate-500 text-sm font-semibold cursor-not-allowed"
+                          title="You must be in this region to trade"
+                        >
+                          Locked
+                        </button>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-stretch">
@@ -416,12 +750,13 @@ export default function Page() {
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
-                        <SpreadBlock yes={0.5} no={0.5} />
-                        <VolumeBlock tvl={0} />
+                        <SpreadBlock yes={m.yesPrice} no={m.noPrice} />
+                        <VolumeBlock tvl={m.volume} />
                       </div>
                     </div>
                   </section>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
