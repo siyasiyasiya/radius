@@ -1,9 +1,11 @@
+// app/layout.tsx
 import "./globals.css";
+import type { Metadata } from "next";
 import SolanaProvider from "./components/SolanaProvider";
 
-export const metadata = {
-  title: "Radius Markets",
-  description: "Hyperlocal prediction markets with ZK-gated location.",
+export const metadata: Metadata = {
+  title: "Radius",
+  description: "Hyperlocal prediction markets",
 };
 
 export default function RootLayout({
@@ -13,7 +15,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-slate-950 text-slate-50">
+      <body>
         <SolanaProvider>{children}</SolanaProvider>
       </body>
     </html>

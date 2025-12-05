@@ -10,6 +10,7 @@ import SpreadBlock from "./components/SpreadBlock";
 import VolumeBlock from "./components/VolumeBlock";
 import TVLSparkline from "./components/TVLSparkline";
 import { proveLocation } from "../lib/zkProver";
+import TradeModal from "./components/TradeModal";
 
 type TVLPoint = { value: number };
 
@@ -20,23 +21,24 @@ type Market = {
   no: number;
   tvl: TVLPoint[];
   region: string;
+  onChainAddress?: string;
 };
 
 const REGIONS = {
-  'west-lafayette': {
-    name: 'West Lafayette, IN',
-    minLat: 40.40,
-    maxLat: 40.50,
+  "west-lafayette": {
+    name: "West Lafayette, IN",
+    minLat: 40.4,
+    maxLat: 40.5,
     minLon: -86.95,
     maxLon: -86.85,
   },
-  'powell': {
-    name: 'Powell, OH',
+  powell: {
+    name: "Powell, OH",
     minLat: 40.13,
     maxLat: 40.23,
-    minLon: -83.10,
-    maxLon: -83.00,
-  }
+    minLon: -83.1,
+    maxLon: -83.0,
+  },
 };
 
 export default function Page() {
@@ -46,6 +48,10 @@ export default function Page() {
   const [isDetecting, setIsDetecting] = useState(false);
   const [isProvingLocation, setIsProvingLocation] = useState(false);
   const wallet = useWallet();
+
+  const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
+  const [defaultSide, setDefaultSide] = useState<"yes" | "no">("yes");
+  const [isSubmittingTrade, setIsSubmittingTrade] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -63,35 +69,45 @@ export default function Page() {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject);
       });
-      
+
       const { latitude, longitude } = position.coords;
-      
+
+      let foundRegion: any = null;
+
       for (const [regionId, bounds] of Object.entries(REGIONS)) {
         if (
-          latitude >= bounds.minLat && latitude <= bounds.maxLat &&
-          longitude >= bounds.minLon && longitude <= bounds.maxLon
+          latitude >= bounds.minLat &&
+          latitude <= bounds.maxLat &&
+          longitude >= bounds.minLon &&
+          longitude <= bounds.maxLon
         ) {
-          setDetectedRegion({ id: regionId, ...bounds, userLat: latitude, userLon: longitude });
+          foundRegion = {
+            id: regionId,
+            ...bounds,
+            userLat: latitude,
+            userLon: longitude,
+          };
           break;
         }
       }
-      
-      if (!detectedRegion) {
-        // Fallback for demo
-        setDetectedRegion({ 
-          id: 'west-lafayette', 
-          ...REGIONS['west-lafayette'],
-          userLat: 40.45, 
-          userLon: -86.90 
+
+      if (foundRegion) {
+        setDetectedRegion(foundRegion);
+      } else {
+        setDetectedRegion({
+          id: "west-lafayette",
+          ...REGIONS["west-lafayette"],
+          userLat: 40.45,
+          userLon: -86.9,
         });
       }
     } catch (error) {
-      console.error('Location detection failed:', error);
-      setDetectedRegion({ 
-        id: 'west-lafayette', 
-        ...REGIONS['west-lafayette'],
-        userLat: 40.45, 
-        userLon: -86.90 
+      console.error("Location detection failed:", error);
+      setDetectedRegion({
+        id: "west-lafayette",
+        ...REGIONS["west-lafayette"],
+        userLat: 40.45,
+        userLon: -86.9,
       });
     }
     setIsDetecting(false);
@@ -99,10 +115,10 @@ export default function Page() {
 
   const generateZKProof = async () => {
     if (!detectedRegion) return;
-    
+
     setIsProvingLocation(true);
     try {
-      const salt = Math.floor(Math.random() * 1000000);
+      const salt = Math.floor(Math.random() * 1_000_000);
       const proof = await proveLocation({
         userLat: detectedRegion.userLat,
         userLon: detectedRegion.userLon,
@@ -112,7 +128,7 @@ export default function Page() {
         maxLon: detectedRegion.maxLon,
         salt,
       });
-      
+
       setLocationProof({
         region: detectedRegion.id,
         proof: proof.proofPacked,
@@ -120,10 +136,45 @@ export default function Page() {
         validUntil: Date.now() + 24 * 60 * 60 * 1000,
       });
     } catch (error) {
-      console.error('ZK proof generation failed:', error);
-      alert('Proof generation failed. Check console for details.');
+      console.error("ZK proof generation failed:", error);
+      alert("Proof generation failed. Check console for details.");
     }
     setIsProvingLocation(false);
+  };
+
+  const handleSubmitTrade = async ({
+    side,
+    amount,
+    slippageBps,
+  }: {
+    side: "yes" | "no";
+    amount: number;
+    slippageBps: number;
+  }) => {
+    if (!selectedMarket) return;
+
+    try {
+      setIsSubmittingTrade(true);
+
+      console.log("Trade params:", {
+        marketId: selectedMarket.id,
+        title: selectedMarket.title,
+        side,
+        amount,
+        slippageBps,
+        region: selectedMarket.region,
+        onChainAddress: selectedMarket.onChainAddress,
+      });
+
+      // Future: call Anchor program.methods.placeOrder here.
+
+      setSelectedMarket(null);
+    } catch (err) {
+      console.error("Trade failed", err);
+      alert("Trade failed. See console for details.");
+    } finally {
+      setIsSubmittingTrade(false);
+    }
   };
 
   const markets: Market[] = [
@@ -133,7 +184,7 @@ export default function Page() {
       yes: 0.42,
       no: 0.58,
       tvl: [{ value: 3000 }, { value: 4800 }, { value: 6400 }],
-      region: 'powell',
+      region: "powell",
     },
     {
       id: 2,
@@ -141,7 +192,7 @@ export default function Page() {
       yes: 0.35,
       no: 0.65,
       tvl: [{ value: 1800 }, { value: 2600 }, { value: 3200 }],
-      region: 'west-lafayette',
+      region: "west-lafayette",
     },
     {
       id: 3,
@@ -149,35 +200,44 @@ export default function Page() {
       yes: 0.28,
       no: 0.72,
       tvl: [{ value: 2200 }, { value: 2800 }, { value: 3600 }],
-      region: 'powell',
+      region: "powell",
     },
   ];
 
-  const filteredMarkets = locationProof 
-    ? markets.filter(m => m.region === locationProof.region)
+  const filteredMarkets = locationProof
+    ? markets.filter((m) => m.region === locationProof.region)
     : [];
 
   return (
     <>
       <Script src="/zk/snarkjs.min.js" strategy="beforeInteractive" />
-      
+
       <div className="flex min-h-screen bg-slate-950 text-slate-50">
         <aside className="hidden md:flex md:w-72 bg-slate-900 border-r border-slate-800 p-6 flex-col gap-8">
           <h1 className="text-2xl font-bold tracking-tight">Radius</h1>
           <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
             Local prediction markets
           </p>
-          
+
           {locationProof && (
             <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
-              <p className="text-xs text-emerald-400 font-semibold mb-1">✓ Location Verified</p>
-              <p className="text-xs text-slate-400">{REGIONS[locationProof.region as keyof typeof REGIONS]?.name}</p>
+              <p className="text-xs text-emerald-400 font-semibold mb-1">
+                ✓ Location Verified
+              </p>
+              <p className="text-xs text-slate-400">
+                {
+                  REGIONS[
+                    locationProof.region as keyof typeof REGIONS
+                  ]?.name
+                }
+              </p>
               <p className="text-[10px] text-slate-500 mt-2">
-                Valid until {new Date(locationProof.validUntil).toLocaleString()}
+                Valid until{" "}
+                {new Date(locationProof.validUntil).toLocaleString()}
               </p>
             </div>
           )}
-          
+
           <SideBlock />
         </aside>
 
@@ -185,7 +245,9 @@ export default function Page() {
           {!wallet.connected && (
             <div className="text-center py-20">
               <h2 className="text-3xl font-bold mb-4">Connect Your Wallet</h2>
-              <p className="text-slate-400 mb-8">Connect to start trading on local markets</p>
+              <p className="text-slate-400 mb-8">
+                Connect to start trading on local markets
+              </p>
               {mounted && <WalletMultiButton />}
             </div>
           )}
@@ -193,31 +255,49 @@ export default function Page() {
           {wallet.connected && !locationProof && (
             <div className="max-w-2xl mx-auto">
               <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-8 text-center">
-                <h2 className="text-2xl font-bold mb-4">Verify Your Location</h2>
+                <h2 className="text-2xl font-bold mb-4">
+                  Verify Your Location
+                </h2>
                 <p className="text-slate-400 mb-6">
-                  Generate a zero-knowledge proof that you're in {detectedRegion ? REGIONS[detectedRegion.id as keyof typeof REGIONS]?.name : 'a supported region'} without revealing your exact address.
+                  Generate a zero knowledge proof that you are in{" "}
+                  {detectedRegion
+                    ? REGIONS[
+                        detectedRegion.id as keyof typeof REGIONS
+                      ]?.name
+                    : "a supported region"}{" "}
+                  without revealing your exact address.
                 </p>
-                
+
                 {!detectedRegion ? (
                   <button
                     onClick={detectLocation}
                     disabled={isDetecting}
                     className="px-6 py-3 rounded-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 font-semibold"
                   >
-                    {isDetecting ? 'Detecting Location...' : 'Detect My Location'}
+                    {isDetecting
+                      ? "Detecting Location..."
+                      : "Detect My Location"}
                   </button>
                 ) : (
                   <div>
                     <div className="bg-sky-500/20 border border-sky-400 rounded-lg p-4 mb-6">
                       <p className="font-semibold mb-1">Location Detected</p>
-                      <p className="text-sm text-slate-300">{REGIONS[detectedRegion.id as keyof typeof REGIONS]?.name}</p>
+                      <p className="text-sm text-slate-300">
+                        {
+                          REGIONS[
+                            detectedRegion.id as keyof typeof REGIONS
+                          ]?.name
+                        }
+                      </p>
                     </div>
                     <button
                       onClick={generateZKProof}
                       disabled={isProvingLocation}
                       className="px-6 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 font-semibold"
                     >
-                      {isProvingLocation ? 'Generating Proof... (this may take 10-30 seconds)' : 'Generate ZK Proof'}
+                      {isProvingLocation
+                        ? "Generating Proof... (this may take 10-30 seconds)"
+                        : "Generate ZK Proof"}
                     </button>
                   </div>
                 )}
@@ -230,7 +310,11 @@ export default function Page() {
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <h2 className="text-xl md:text-2xl font-semibold tracking-tight">
-                    {REGIONS[locationProof.region as keyof typeof REGIONS]?.name}
+                    {
+                      REGIONS[
+                        locationProof.region as keyof typeof REGIONS
+                      ]?.name
+                    }
                   </h2>
                   <p className="text-sm text-slate-400">
                     {filteredMarkets.length} local markets available
@@ -256,7 +340,13 @@ export default function Page() {
                         </h3>
                       </div>
 
-                      <button className="shrink-0 px-4 py-2 rounded-full bg-sky-500 hover:bg-sky-400 text-sm font-semibold">
+                      <button
+                        className="shrink-0 px-4 py-2 rounded-full bg-sky-500 hover:bg-sky-400 text-sm font-semibold"
+                        onClick={() => {
+                          setSelectedMarket(m);
+                          setDefaultSide("yes");
+                        }}
+                      >
                         Trade
                       </button>
                     </div>
@@ -289,7 +379,9 @@ export default function Page() {
 
                       <div className="grid grid-cols-2 gap-3">
                         <SpreadBlock yes={m.yes} no={m.no} />
-                        <VolumeBlock tvl={m.tvl[m.tvl.length - 1].value} />
+                        <VolumeBlock
+                          tvl={m.tvl[m.tvl.length - 1].value}
+                        />
                       </div>
                     </div>
                   </section>
@@ -299,6 +391,17 @@ export default function Page() {
           )}
         </main>
       </div>
+
+      {selectedMarket && (
+        <TradeModal
+          open={!!selectedMarket}
+          market={selectedMarket}
+          defaultSide={defaultSide}
+          onClose={() => setSelectedMarket(null)}
+          onSubmit={handleSubmitTrade}
+          isSubmitting={isSubmittingTrade}
+        />
+      )}
     </>
   );
 }
