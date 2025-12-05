@@ -5,7 +5,7 @@ members = [
 ]
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [toolchain]
@@ -15,9 +15,10 @@ anchor_version = "0.31.1"
 zk_location_verifier = "Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD"
 hyperlocal_markets = "8pkLV5wpiXFTu9VGwhDMdUESp1RkQUPfa8CyqT2bKket"
 
+
 [programs.devnet]
-zk_location_verifier = "8dmw53w4DQSZGYARbz7LD4dp7oG9AZKFtNU6ujeKpEGU"
-hyperlocal_markets = "3xPomABvsTSG6jpco6R3svg493h5KJNBM9UzVT1Sx7pP"
+zk_location_verifier = "56qEvUYQnhfEf557ftLVdjtwqfJA6TpG2cnru3MyhT7Z"
+hyperlocal_markets = "EA838rrQJPTmk4FNMRV4esgU7rFo5oRLGgW1Nws1jzox"
 
 [scripts]
 

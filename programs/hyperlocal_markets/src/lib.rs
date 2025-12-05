@@ -22,9 +22,11 @@ pub mod hyperlocal_markets {
             question.as_bytes().len() <= MAX_QUESTION_LEN,
             MarketError::QuestionTooLong
         );
+        let qhash = question_hash(&question);
         let market = &mut ctx.accounts.market;
         market.region_id = region_id;
         market.question = question;
+        market.question_hash = qhash;
         market.close_time = close_time;
         market.resolved = false;
         market.outcome = 0;
@@ -190,10 +192,11 @@ pub mod hyperlocal_markets {
         let payout = u64::try_from(payout_u128).map_err(|_| MarketError::MathOverflow)?;
 
         // Transfer from vault to user.
+        let question_hash = market.question_hash;
         let seeds: &[&[u8]] = &[
             b"market",
             market.creator.as_ref(),
-            question_hash(&market.question).as_ref(),
+            question_hash.as_ref(),
             &[market.market_bump],
         ];
         let signer = &[&seeds[..]];
@@ -233,10 +236,11 @@ pub mod hyperlocal_markets {
             return Ok(());
         }
 
+        let question_hash = market.question_hash;
         let seeds: &[&[u8]] = &[
             b"market",
             market.creator.as_ref(),
-            question_hash(&market.question).as_ref(),
+            question_hash.as_ref(),
             &[market.market_bump],
         ];
         let signer = &[&seeds[..]];
@@ -265,7 +269,7 @@ pub struct CreateMarket<'info> {
         init,
         payer = payer,
         space = 8 + Market::SIZE,
-        seeds = [b"market", payer.key().as_ref(), question_hash(&question).as_ref()],
+        seeds = [b"market", payer.key().as_ref(), &question_hash(&question)],
         bump
     )]
     pub market: Account<'info, Market>,
@@ -290,7 +294,7 @@ pub struct PlaceOrder<'info> {
     #[account(mut)]
     pub trader: Signer<'info>,
     #[account(
-        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
+        seeds = [b"market", market.creator.as_ref(), market.question_hash.as_ref()],
         bump = market.market_bump
     )]
     pub market: Account<'info, Market>,
@@ -317,7 +321,7 @@ pub struct PlaceOrder<'info> {
 pub struct ResolveMarket<'info> {
     #[account(
         mut,
-        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
+        seeds = [b"market", market.creator.as_ref(), market.question_hash.as_ref()],
         bump = market.market_bump
     )]
     pub market: Account<'info, Market>,
@@ -330,7 +334,7 @@ pub struct Claim<'info> {
     pub trader: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
+        seeds = [b"market", market.creator.as_ref(), market.question_hash.as_ref()],
         bump = market.market_bump
     )]
     pub market: Account<'info, Market>,
@@ -352,7 +356,7 @@ pub struct EmergencyWithdraw<'info> {
     pub resolver: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
+        seeds = [b"market", market.creator.as_ref(), market.question_hash.as_ref()],
         bump = market.market_bump
     )]
     pub market: Account<'info, Market>,
@@ -378,10 +382,11 @@ pub struct Market {
     pub total_pool: u64,
     pub creator: Pubkey,
     pub market_bump: u8,
+    pub question_hash: [u8; 32],
 }
 
 impl Market {
-    pub const SIZE: usize = 343;
+    pub const SIZE: usize = 375;
 }
 
 #[account]
