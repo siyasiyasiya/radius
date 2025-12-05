@@ -3,7 +3,7 @@ use groth16_solana::groth16::Groth16Verifier;
 
 pub mod verifying_key;
 
-declare_id!("Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD");
+declare_id!("56qEvUYQnhfEf557ftLVdjtwqfJA6TpG2cnru3MyhT7Z");
 
 #[program]
 pub mod zk_location_verifier {

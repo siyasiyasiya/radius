@@ -8,7 +8,7 @@ import {
 } from "@solana/web3.js";
 
 export const ZK_LOCATION_PROGRAM_ID = new PublicKey(
-  "Hr7Wh6PHTsS7e74HQWtafBjNhj9egXQgAM9yeWSnwsDD"
+  "56qEvUYQnhfEf557ftLVdjtwqfJA6TpG2cnru3MyhT7Z"
 );
 
 // From IDL: discriminator for submit_location_proof

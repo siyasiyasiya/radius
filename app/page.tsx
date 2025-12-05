@@ -196,39 +196,21 @@ export default function Page() {
       }
       
       console.log("Submitting proof to blockchain...");
-      console.log("Wallet public key:", wallet.publicKey.toBase58());
-      console.log("Proof packed:", proof.proofPacked);
-      console.log("Public inputs packed:", proof.publicInputsPacked);
+      const submitRes = await submitLocationProof(
+        wallet,
+        proof.proofPacked,
+        proof.publicInputsPacked
+      );
       
-      try {
-        const submitRes = await submitLocationProof(
-          wallet,
-          proof.proofPacked,
-          proof.publicInputsPacked
-        );
-        
-        console.log("Blockchain submission successful:", submitRes);
-        setUserStatePda(submitRes.userStatePda.toBase58());
-        
-        // Only set locationProof AFTER successful blockchain submission
-        setLocationProof({
-          region: detectedRegion.id,
-          proof: proof.proofPacked,
-          publicInputs: proof.publicInputsPacked,
-          validUntil: Date.now() + 24 * 60 * 60 * 1000,
-        });
-      } catch (submitError: any) {
-        console.error("Blockchain submission failed:", submitError);
-        console.error("Error name:", submitError?.name);
-        console.error("Error message:", submitError?.message);
-        
-        // Check if it's a simulation error with logs
-        if (submitError?.logs) {
-          console.error("Transaction logs:", submitError.logs);
-        }
-        
-        alert(`Blockchain submission failed: ${submitError?.message || "Unknown error"}`);
-      }
+      console.log("Blockchain submission successful:", submitRes);
+      setUserStatePda(submitRes.userStatePda.toBase58());
+      
+      setLocationProof({
+        region: detectedRegion.id,
+        proof: proof.proofPacked,
+        publicInputs: proof.publicInputsPacked,
+        validUntil: Date.now() + 24 * 60 * 60 * 1000,
+      });
     } catch (error: any) {
       console.error("ZK proof generation failed:", error);
       alert(`Proof generation failed: ${error?.message || "Check console for details."}`);
