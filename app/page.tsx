@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
 import Script from "next/script";
 import { Connection, PublicKey } from "@solana/web3.js";
+import { getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
 
 import SideBlock from "./components/SideBlock";
 import SpreadBlock from "./components/SpreadBlock";
@@ -22,6 +23,11 @@ import {
   hashManifest,
 } from "../lib/hyperlocalClient";
 import { submitLocationProof } from "../lib/zkLocationClient";
+
+// Devnet USDC mint address
+const USDC_MINT_DEVNET = new PublicKey("Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr");
+// USDC has 6 decimals
+const USDC_DECIMALS = 6;
 
 type TVLPoint = { value: number };
 
@@ -331,12 +337,47 @@ export default function Page() {
   const [isCreatingMarket, setIsCreatingMarket] = useState(false);
 
   // USDC balance and deposit state
-  const [usdcBalance, setUsdcBalance] = useState<number>(250.00); // Mock starting balance
+  const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
+  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
-  const [isDepositing, setIsDepositing] = useState(false);
   
   // User's positions in markets
   const [userPositions, setUserPositions] = useState<Record<string, { yes: number; no: number }>>({});
+
+  // Fetch USDC balance from chain
+  const fetchUsdcBalance = useCallback(async () => {
+    if (!wallet.publicKey) {
+      setUsdcBalance(null);
+      return;
+    }
+    
+    setIsLoadingBalance(true);
+    try {
+      const ata = await getAssociatedTokenAddress(USDC_MINT_DEVNET, wallet.publicKey);
+      const accountInfo = await getAccount(connection, ata);
+      const balance = Number(accountInfo.amount) / Math.pow(10, USDC_DECIMALS);
+      setUsdcBalance(balance);
+    } catch (err: any) {
+      // Account doesn't exist = 0 balance
+      if (err.name === "TokenAccountNotFoundError") {
+        setUsdcBalance(0);
+      } else {
+        console.error("Failed to fetch USDC balance:", err);
+        setUsdcBalance(0);
+      }
+    } finally {
+      setIsLoadingBalance(false);
+    }
+  }, [wallet.publicKey, connection]);
+
+  // Fetch balance when wallet connects
+  useEffect(() => {
+    if (wallet.connected && wallet.publicKey) {
+      fetchUsdcBalance();
+    } else {
+      setUsdcBalance(null);
+    }
+  }, [wallet.connected, wallet.publicKey, fetchUsdcBalance]);
 
   // Load persisted state from localStorage on mount
   useEffect(() => {
@@ -572,8 +613,8 @@ export default function Page() {
     if (!selectedMarket || !wallet.publicKey) return;
     
     // Check balance
-    if (amount > usdcBalance) {
-      alert("Insufficient USDC balance. Please deposit more funds.");
+    if (usdcBalance === null || amount > usdcBalance) {
+      alert("Insufficient USDC balance. Click 'Get USDC' to get devnet tokens.");
       return;
     }
 
@@ -598,10 +639,10 @@ export default function Page() {
         tx: mockTxSig,
       });
 
-      // Update local state
-      setUsdcBalance(prev => prev - amount);
+      // Refresh actual USDC balance from chain
+      await fetchUsdcBalance();
       
-      // Update user positions
+      // Update user positions (mock for demo - in prod would fetch from chain)
       setUserPositions(prev => ({
         ...prev,
         [selectedMarket.id]: {
@@ -624,23 +665,6 @@ export default function Page() {
       alert("Trade failed. See console for details.");
     } finally {
       setIsSubmittingTrade(false);
-    }
-  };
-
-  // Handle USDC deposit (mock Circle integration)
-  const handleDeposit = async (amount: number) => {
-    setIsDepositing(true);
-    try {
-      // Simulate Circle API delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      setUsdcBalance(prev => prev + amount);
-      setShowDepositModal(false);
-      alert(`✅ Successfully deposited $${amount.toFixed(2)} USDC via Circle!`);
-    } catch (err) {
-      alert("Deposit failed. Please try again.");
-    } finally {
-      setIsDepositing(false);
     }
   };
 
@@ -792,17 +816,35 @@ export default function Page() {
                 </div>
               </div>
               <p className="text-2xl font-bold text-white mb-3">
-                ${usdcBalance.toFixed(2)}
+                {isLoadingBalance ? (
+                  <span className="text-slate-500">Loading...</span>
+                ) : usdcBalance !== null ? (
+                  `$${usdcBalance.toFixed(2)}`
+                ) : (
+                  <span className="text-slate-500">--</span>
+                )}
               </p>
-              <button
-                onClick={() => setShowDepositModal(true)}
-                className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Deposit via Circle
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowDepositModal(true)}
+                  className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Get USDC
+                </button>
+                <button
+                  onClick={fetchUsdcBalance}
+                  disabled={isLoadingBalance}
+                  className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm transition-colors disabled:opacity-50"
+                  title="Refresh balance"
+                >
+                  <svg className={`w-4 h-4 ${isLoadingBalance ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+              </div>
             </div>
           )}
 
@@ -1067,7 +1109,7 @@ export default function Page() {
         userLocation={detectedRegion ? { lat: detectedRegion.userLat, lon: detectedRegion.userLon } : null}
       />
 
-      {/* Deposit Modal */}
+      {/* Get USDC Modal */}
       {showDepositModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
@@ -1076,7 +1118,7 @@ export default function Page() {
           />
           <div className="relative bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold">Deposit USDC</h2>
+              <h2 className="text-xl font-bold">Get Devnet USDC</h2>
               <button
                 onClick={() => setShowDepositModal(false)}
                 className="text-slate-400 hover:text-white"
@@ -1087,45 +1129,71 @@ export default function Page() {
               </button>
             </div>
 
-            {/* Circle branding */}
-            <div className="bg-slate-800 rounded-lg p-4 mb-6 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center">
-                <span className="text-xl font-bold text-white">○</span>
-              </div>
-              <div>
-                <p className="font-semibold">Circle USDC</p>
-                <p className="text-xs text-slate-400">Fast, secure deposits</p>
+            {/* USDC Info */}
+            <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-6">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center">
+                  <span className="text-lg font-bold text-white">$</span>
+                </div>
+                <div>
+                  <p className="font-semibold">USDC on Devnet</p>
+                  <p className="text-xs text-slate-400">For testing prediction markets</p>
+                </div>
               </div>
             </div>
 
             <div className="space-y-4">
-              <p className="text-sm text-slate-400">Select deposit amount:</p>
-              <div className="grid grid-cols-2 gap-3">
-                {[50, 100, 250, 500].map((amt) => (
-                  <button
-                    key={amt}
-                    onClick={() => handleDeposit(amt)}
-                    disabled={isDepositing}
-                    className="py-3 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold transition-colors disabled:opacity-50"
-                  >
-                    ${amt}
-                  </button>
-                ))}
+              <div className="bg-slate-800 rounded-lg p-4">
+                <p className="text-sm font-medium mb-2">USDC Mint Address:</p>
+                <code className="text-xs text-sky-400 break-all bg-slate-900 p-2 rounded block">
+                  4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+                </code>
               </div>
-              
-              {isDepositing && (
-                <div className="flex items-center justify-center gap-2 py-4">
-                  <svg className="animate-spin h-5 w-5 text-blue-500" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  <span className="text-slate-400">Processing via Circle...</span>
+
+              <div className="space-y-3">
+                <p className="text-sm text-slate-400">Options to get devnet USDC:</p>
+                
+                <a
+                  href="https://faucet.circle.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full py-3 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 font-semibold text-center transition-colors"
+                >
+                  Circle Faucet →
+                </a>
+                
+                <a
+                  href={`https://spl-token-faucet.com/?token-name=USDC-Dev`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full py-3 px-4 rounded-lg bg-slate-700 hover:bg-slate-600 font-semibold text-center transition-colors"
+                >
+                  SPL Token Faucet →
+                </a>
+              </div>
+
+              {wallet.publicKey && (
+                <div className="bg-slate-800 rounded-lg p-3 mt-4">
+                  <p className="text-xs text-slate-400 mb-1">Your Wallet:</p>
+                  <code className="text-xs text-slate-300 break-all">
+                    {wallet.publicKey.toBase58()}
+                  </code>
                 </div>
               )}
             </div>
 
+            <button
+              onClick={() => {
+                fetchUsdcBalance();
+                setShowDepositModal(false);
+              }}
+              className="w-full mt-6 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-semibold transition-colors"
+            >
+              Done - Refresh Balance
+            </button>
+
             <p className="text-xs text-slate-500 mt-4 text-center">
-              Powered by Circle • Instant settlement on Solana
+              Devnet tokens have no real value
             </p>
           </div>
         </div>
