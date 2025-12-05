@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::keccak;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
@@ -39,7 +40,12 @@ pub mod hyperlocal_markets {
         Ok(())
     }
 
-    pub fn place_order(ctx: Context<PlaceOrder>, amount: u64, side: Side) -> Result<()> {
+    pub fn place_order(
+        ctx: Context<PlaceOrder>,
+        amount: u64,
+        side: Side,
+        min_shares_out: u64,
+    ) -> Result<()> {
         let market = &ctx.accounts.market;
         let user_location = &ctx.accounts.user_location;
 
@@ -108,6 +114,11 @@ pub mod hyperlocal_markets {
                 (yes, new_no_shares, minted)
             }
         };
+
+        require!(
+            minted >= min_shares_out as u128,
+            MarketError::SlippageExceeded
+        );
 
         // Update market.
         let market = &mut ctx.accounts.market;
@@ -182,7 +193,7 @@ pub mod hyperlocal_markets {
         let seeds: &[&[u8]] = &[
             b"market",
             market.creator.as_ref(),
-            question_seed(&market.question),
+            question_hash(&market.question).as_ref(),
             &[market.market_bump],
         ];
         let signer = &[&seeds[..]];
@@ -200,6 +211,49 @@ pub mod hyperlocal_markets {
         user_pos.claimed = true;
         Ok(())
     }
+
+    pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>) -> Result<()> {
+        let market = &mut ctx.accounts.market;
+        require!(market.resolved, MarketError::NotResolved);
+        require!(
+            ctx.accounts.resolver.key() == market.resolver,
+            MarketError::UnauthorizedResolver
+        );
+
+        let winning_total = match market.outcome {
+            1 => market.yes_shares,
+            2 => market.no_shares,
+            _ => 0,
+        };
+        // Only allow when there were effectively no winning-side bets (just dust).
+        require!(winning_total <= 1, MarketError::NoWinningLiquidity);
+
+        let amount = market.total_pool;
+        if amount == 0 {
+            return Ok(());
+        }
+
+        let seeds: &[&[u8]] = &[
+            b"market",
+            market.creator.as_ref(),
+            question_hash(&market.question).as_ref(),
+            &[market.market_bump],
+        ];
+        let signer = &[&seeds[..]];
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.vault.to_account_info(),
+                to: ctx.accounts.resolver_usdc.to_account_info(),
+                authority: market.to_account_info(),
+            },
+            signer,
+        );
+        token::transfer(cpi_ctx, amount)?;
+
+        market.total_pool = 0;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -211,7 +265,7 @@ pub struct CreateMarket<'info> {
         init,
         payer = payer,
         space = 8 + Market::SIZE,
-        seeds = [b"market", payer.key().as_ref(), question_seed(&question)],
+        seeds = [b"market", payer.key().as_ref(), question_hash(&question).as_ref()],
         bump
     )]
     pub market: Account<'info, Market>,
@@ -236,7 +290,7 @@ pub struct PlaceOrder<'info> {
     #[account(mut)]
     pub trader: Signer<'info>,
     #[account(
-        seeds = [b"market", market.creator.as_ref(), question_seed(&market.question)],
+        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
         bump = market.market_bump
     )]
     pub market: Account<'info, Market>,
@@ -263,7 +317,7 @@ pub struct PlaceOrder<'info> {
 pub struct ResolveMarket<'info> {
     #[account(
         mut,
-        seeds = [b"market", market.creator.as_ref(), question_seed(&market.question)],
+        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
         bump = market.market_bump
     )]
     pub market: Account<'info, Market>,
@@ -276,7 +330,7 @@ pub struct Claim<'info> {
     pub trader: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"market", market.creator.as_ref(), question_seed(&market.question)],
+        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
         bump = market.market_bump
     )]
     pub market: Account<'info, Market>,
@@ -290,6 +344,22 @@ pub struct Claim<'info> {
     pub trader_usdc: Account<'info, TokenAccount>,
     #[account(mut, address = market.vault)]
     pub vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct EmergencyWithdraw<'info> {
+    pub resolver: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"market", market.creator.as_ref(), question_hash(&market.question).as_ref()],
+        bump = market.market_bump
+    )]
+    pub market: Account<'info, Market>,
+    #[account(mut, address = market.vault)]
+    pub vault: Account<'info, TokenAccount>,
+    #[account(mut, constraint = resolver_usdc.mint == market.usdc_mint)]
+    pub resolver_usdc: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -376,15 +446,14 @@ pub enum MarketError {
     UnauthorizedResolver,
     #[msg("Already claimed")]
     AlreadyClaimed,
+    #[msg("Slippage exceeded")]
+    SlippageExceeded,
+    #[msg("No winning-side liquidity")]
+    NoWinningLiquidity,
 }
 
-fn question_seed(question: &str) -> &'_ [u8] {
-    let bytes = question.as_bytes();
-    if bytes.len() <= 32 {
-        bytes
-    } else {
-        &bytes[..32]
-    }
+fn question_hash(question: &str) -> [u8; 32] {
+    keccak::hash(question.as_bytes()).to_bytes()
 }
 
 fn isqrt(x: u128) -> u128 {
